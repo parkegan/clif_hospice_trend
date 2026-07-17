@@ -1,0 +1,55 @@
+medicare_id,hospital_name,county_fips,catchment_counties,catchment_hospices,catchment_with_adc,catchment_adc,catchment_pop,hospice_adc_per_100k,home_adc_per_100k
+110010,Emory University Hospital,13089,5,61,54,3499,2662570,131.41,68.01
+110078,Emory Crawford Long Hospital (Now it is Midtown Hospital),13121,10,89,76,4047,3839996,105.39,94.44
+110082,Emory St Joseph Hospital,13121,10,89,76,4047,3839996,105.39,94.44
+110230,Emory Johns Creek Hospital,13121,10,89,76,4047,3839996,105.39,94.44
+210009,Johns Hopkins Hospital,24510,2,6,6,1814,1446837,125.38,0.34
+210029,Johns Hopkins Bayview Medical Center,24510,2,6,6,1814,1446837,125.38,0.34
+210048,Johns Hopkins Howard County Medical Center,24027,6,14,14,3115,3919031,79.48,118.39
+210022,Suburban Hospital (Johns Hopkins Medicine),24031,7,17,13,2026,4052228,50,51.94
+090005,Sibley Memorial Hospital,11001,4,6,6,861,2424476,35.51,0
+230046,University of Michigan Health,26161,6,75,66,5208,3670607,141.88,78
+220086,Beth Israel Deaconess Medical Center,25025,4,38,36,3907,3684320,106.04,68.74
+140281,Northwestern Memorial Hospital,17031,8,48,44,4980,3994749,124.66,60.57
+140242,Northwestern Medicine Central DuPage Hospital,17043,4,45,40,3886,6609280,58.8,297.27
+140211,Northwestern Medicine Delnor Community Hospital,17089,5,65,58,6002,6737831,89.08,6.39
+140130,Northwestern Medicine Lake Forest Hospital,17097,6,41,37,3648,6093449,59.87,69.53
+140286,Northwestern Medicine Kishwaukee Hospital,17037,8,13,11,1047,1492227,70.16,0
+140116,Northwestern Medicine Huntley Hospital,17111,7,47,42,3832,6921612,55.36,0
+140116,Northwestern Medicine McHenry Hospital,17111,7,47,42,3832,6921612,55.36,0
+140062,Northwestern Medicine Palos Hospital,17031,8,48,44,4980,3994749,124.66,60.57
+141340,Northwestern Medicine Valley West Hospitala,17037,8,13,11,1047,1492227,70.16,0
+380009,Oregon Health & Science University Hospital (Ohsu Hospital And Clinics),41051,6,17,16,1412,1617463,87.3,165.88
+380021,Hillsboro Medical Center,41067,6,22,22,1966,1467763,133.95,63.39
+390111,Hospital of the University of Pennsylvania,42101,6,49,46,4253,3367049,126.31,10.93
+390226,Pennsylvania Hospital,42101,6,49,46,4253,3367049,126.31,10.93
+390223,Penn Presbyterian Medical Center,42101,6,49,46,4253,3367049,126.31,10.93
+390179,Chester County Hospital,42029,6,45,35,3168,3089543,102.54,94.98
+390111,Hospital of the University of Pennsylvania – Cedar Avenue,42101,6,49,46,4253,3367049,126.31,10.93
+310010,Penn Medicine Princeton Medical Center,34023,5,15,14,2012,2441939,82.39,75.12
+140119,Rush University Medical Center,17031,8,48,44,4980,3994749,124.66,60.57
+140088,University of Chicago Medical Center,17031,8,48,44,4980,3994749,124.66,60.57
+050454,UCSF Helen Diller Medical Center at Parnassus Heights,06075,4,89,66,2621,3870714,67.71,4.34
+050454,UCSF Medical Center at Mission Bay,06075,4,89,66,2621,3870714,67.71,4.34
+050454,UCSF Medical Center at Mount Zion,06075,4,89,66,2621,3870714,67.71,4.34
+240080,M Health Fairview University of Minnesota Medical Center,27053,7,13,11,1123,1854759,60.55,170.87
+240040,Fairview Range (University Medical Center Mesabi / Mesabi Clinics),27137,6,2,1,236,164221,143.71,220.43
+240141,M Health Fairview Northland Medical Center,27095,7,5,5,179,312365,57.3,11.33
+240064,Grand Itasca Clinic and Hospital,27061,5,7,7,469,304186,154.18,524.19
+240050,M Health Fairview Lakes Medical Center,27025,7,7,7,1060,780804,135.76,0
+240213,M Health Fairview Woodwinds Hospital,27163,7,13,11,1146,1594473,71.87,375.19
+240080,Fairview-Riverside,27053,7,13,11,1123,1854759,60.55,170.87
+240207,M Health Fairview Ridges Hospital,27037,7,30,28,3960,2410074,164.31,35.87
+240063,St. Joseph’s Hospital,27123,4,25,25,3408,2354953,144.72,138.29
+240210,M Health Fairview St John's Hospital,27123,4,25,25,3408,2354953,144.72,138.29
+240078,M Health Fairview Southdale Hospital,27053,7,13,11,1123,1854759,60.55,170.87
+242004,Bethesda Hospital,27123,4,25,25,3408,2354953,144.72,138.29
+221300,Martha's Vinyard Hospital,25007,3,8,8,812,819018,99.14,92.32
+220071,Massachusetts General Hospital,25025,4,38,36,3907,3684320,106.04,68.74
+300018,Wentworth-Douglass Hospital,33017,5,12,11,647,794996,81.38,134.27
+220035,Salem Hospital,25009,4,21,20,1690,3153368,53.59,207.48
+220119,Brigham and Women's Faulkner Hospital,25025,4,38,36,3907,3684320,106.04,68.74
+220110,Brigham and Women's Hospital,25025,4,38,36,3907,3684320,106.04,68.74
+220101,Newton-Wellesley Hospital,25017,5,32,30,3698,3602748,102.64,53
+220177,Nantucket Cottage Hospital,25019,1,1,1,19,20580,92.32,0
+220015,Cooley Dickinson Hospital,25015,4,21,19,1500,1521433,98.59,84.12

@@ -1,0 +1,11 @@
+# Add local path to CLIF tables (don't need / at the end)
+tables_location: "/home/path/to/clif/tables"
+
+# Add your lowercase institution name 
+site_lowercase: "site_name"
+
+# Add your local time zone - Olson name
+time_zone: "America/Time_Zone"
+
+# Can be parquet or csv
+file_type: "parquet/csv"

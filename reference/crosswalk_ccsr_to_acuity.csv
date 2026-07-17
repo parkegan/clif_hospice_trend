@@ -1,0 +1,557 @@
+ccsr_category,ccsr_category_desc,body_system,acuity_category,review_flag,note
+BLD001,Nutritional anemia,Blood/immune,Other/residual,0,
+BLD002,Hemolytic anemia,Blood/immune,Other/residual,0,
+BLD003,Aplastic anemia,Blood/immune,Other/residual,0,
+BLD004,Acute posthemorrhagic anemia,Blood/immune,Other/residual,0,
+BLD005,Sickle cell trait/anemia,Blood/immune,Other/residual,0,
+BLD006,Coagulation and hemorrhagic disorders,Blood/immune,Other/residual,0,
+BLD007,Diseases of white blood cells,Blood/immune,Other/residual,0,
+BLD008,Immunity disorders,Blood/immune,Other/residual,0,
+BLD009,Postprocedural or postoperative complications of the spleen,Blood/immune,Other/residual,0,
+BLD010,Other specified and unspecified hematologic conditions,Blood/immune,Other/residual,0,
+CIR001,Chronic rheumatic heart disease,Circulatory,Other/residual,0,
+CIR002,Acute rheumatic heart disease,Circulatory,Other/residual,0,
+CIR003,Nonrheumatic and unspecified valve disorders,Circulatory,Other/residual,0,
+CIR004,Endocarditis and endocardial disease,Circulatory,Acute infection/sepsis,0,reviewed(pgl): confirmed
+CIR005,Myocarditis and cardiomyopathy,Circulatory,Other/residual,0,
+CIR006,Pericarditis and pericardial disease,Circulatory,Other/residual,0,
+CIR007,Essential hypertension,Circulatory,Other/residual,0,
+CIR008,Hypertension with complications and secondary hypertension,Circulatory,Other/residual,0,
+CIR009,Acute myocardial infarction,Circulatory,Acute cardiovascular,0,Acute MI
+CIR010,Complications of acute myocardial infarction,Circulatory,Acute cardiovascular,0,Complications of acute MI
+CIR011,Coronary atherosclerosis and other heart disease,Circulatory,Other/residual,0,
+CIR012,Nonspecific chest pain,Circulatory,Other/residual,0,
+CIR013,Acute pulmonary embolism,Circulatory,Acute noninfectious respiratory,0,Acute pulmonary embolism (per your grouping)
+CIR014,Pulmonary heart disease,Circulatory,Other/residual,0,reviewed(pgl): confirmed
+CIR015,Other and ill-defined heart disease,Circulatory,Other/residual,0,
+CIR016,Conduction disorders,Circulatory,Other/residual,0,
+CIR017,Cardiac dysrhythmias,Circulatory,Other/residual,0,reviewed(pgl): confirmed
+CIR018,Cardiac arrest and ventricular fibrillation,Circulatory,Acute cardiovascular,0,Cardiac arrest / VF
+CIR019,Heart failure,Circulatory,Chronic organ failure,0,Heart failure
+CIR020,Cerebral infarction,Circulatory,Acute neurological,0,Cerebral infarction (ischemic stroke)
+CIR021,Acute hemorrhagic cerebrovascular disease,Circulatory,Acute neurological,0,Acute hemorrhagic CVD (ICH/SAH)
+CIR022,Sequela of hemorrhagic cerebrovascular disease,Circulatory,Other/residual,0,reviewed(pgl): confirmed
+CIR023,Occlusion or stenosis of precerebral or cerebral arteries without infarction,Circulatory,Acute neurological,0,reviewed(pgl): confirmed
+CIR024,Other and ill-defined cerebrovascular disease,Circulatory,Acute neurological,0,reviewed(pgl): confirmed
+CIR025,Sequela of cerebral infarction and other cerebrovascular disease,Circulatory,Other/residual,0,reviewed(pgl): confirmed
+CIR026,Peripheral and visceral vascular disease,Circulatory,Other/residual,0,
+CIR027,Arterial dissections,Circulatory,Other/residual,0,
+CIR028,Gangrene,Circulatory,Other/residual,0,
+CIR029,Aortic; peripheral; and visceral artery aneurysms,Circulatory,Other/residual,0,
+CIR030,Aortic and peripheral arterial embolism or thrombosis,Circulatory,Other/residual,0,
+CIR031,Hypotension,Circulatory,Other/residual,0,reviewed(pgl): confirmed
+CIR032,Other specified and unspecified circulatory disease,Circulatory,Other/residual,0,
+CIR033,Acute phlebitis; thrombophlebitis and thromboembolism,Circulatory,Other/residual,0,
+CIR034,Chronic phlebitis; thrombophlebitis and thromboembolism,Circulatory,Other/residual,0,
+CIR035,Varicose veins of lower extremity,Circulatory,Other/residual,0,
+CIR036,Postthrombotic syndrome and venous insufficiency/hypertension,Circulatory,Other/residual,0,
+CIR037,Vasculitis,Circulatory,Other/residual,0,
+CIR038,Postprocedural or postoperative circulatory system complication,Circulatory,Other/residual,0,
+CIR039,Other specified diseases of veins and lymphatics,Circulatory,Other/residual,0,
+DEN001,Any dental condition including traumatic injury,Dental,Other/residual,0,
+DEN002,Nontraumatic dental conditions,Dental,Other/residual,0,
+DEN003,"Caries, periodontitis, and other preventable dental conditions",Dental,Other/residual,0,
+DIG001,Intestinal infection,Digestive,Acute infection/sepsis,0,Intestinal infection
+DIG002,Disorders of teeth and gingiva,Digestive,Other/residual,0,
+DIG003,Diseases of mouth; excluding dental,Digestive,Other/residual,0,
+DIG004,Esophageal disorders,Digestive,Other/residual,0,
+DIG005,Gastroduodenal ulcer,Digestive,Other/residual,0,
+DIG006,Gastrointestinal and biliary perforation,Digestive,Other/residual,0,
+DIG007,Gastritis and duodenitis,Digestive,Other/residual,0,
+DIG008,Other specified and unspecified disorders of stomach and duodenum,Digestive,Other/residual,0,
+DIG009,Appendicitis and other appendiceal conditions,Digestive,Other/residual,0,
+DIG010,Abdominal hernia,Digestive,Other/residual,0,
+DIG011,Regional enteritis and ulcerative colitis,Digestive,Other/residual,0,
+DIG012,Intestinal obstruction and ileus,Digestive,Other/residual,0,
+DIG013,Diverticulosis and diverticulitis,Digestive,Other/residual,0,
+DIG014,Hemorrhoids,Digestive,Other/residual,0,
+DIG015,Anal and rectal conditions,Digestive,Other/residual,0,
+DIG016,Peritonitis and intra-abdominal abscess,Digestive,Acute infection/sepsis,0,reviewed(pgl): confirmed
+DIG017,Biliary tract disease,Digestive,Other/residual,0,
+DIG018,Hepatic failure,Digestive,Chronic organ failure,0,reviewer(pgl): other? there are chronic hepatidities…
+DIG019,Other specified and unspecified liver disease,Digestive,Chronic organ failure,0,reviewed(pgl): confirmed
+DIG020,Pancreatic disorders (excluding diabetes),Digestive,Other/residual,0,
+DIG021,Gastrointestinal hemorrhage,Digestive,Other/residual,0,
+DIG022,Noninfectious gastroenteritis,Digestive,Other/residual,0,
+DIG023,Noninfectious hepatitis,Digestive,Chronic organ failure,0,noninfectious/chronic hepatitis -> chronic organ failure (reviewer Q)
+DIG024,Postprocedural or postoperative digestive system complication,Digestive,Other/residual,0,
+DIG025,Other specified and unspecified gastrointestinal disorders,Digestive,Other/residual,0,
+EAR001,Otitis media,Ear,Acute infection/sepsis,0,reviewed(pgl): confirmed
+EAR002,Diseases of middle ear and mastoid (except otitis media),Ear,Other/residual,0,
+EAR003,Diseases of inner ear and related conditions,Ear,Other/residual,0,
+EAR004,Hearing loss,Ear,Other/residual,0,
+EAR005,Postprocedural or postoperative ear and/or mastoid process complication,Ear,Other/residual,0,
+EAR006,Other specified and unspecified disorders of the ear,Ear,Other/residual,0,
+END001,Thyroid disorders,Endocrine/metabolic,Other/residual,0,
+END002,Diabetes mellitus without complication,Endocrine/metabolic,Other/residual,0,
+END003,Diabetes mellitus with complication,Endocrine/metabolic,Other/residual,0,
+END004,"Diabetes mellitus, Type 1",Endocrine/metabolic,Other/residual,0,
+END005,"Diabetes mellitus, Type 2",Endocrine/metabolic,Other/residual,0,
+END006,"Diabetes mellitus, due to underlying condition, drug or chemical induced, or other specified type",Endocrine/metabolic,Other/residual,0,
+END007,Nutritional deficiencies,Endocrine/metabolic,Other/residual,0,
+END008,Malnutrition,Endocrine/metabolic,Frailty/debility/FTT,0,reviewed(pgl): confirmed
+END009,Obesity,Endocrine/metabolic,Other/residual,0,
+END010,Disorders of lipid metabolism,Endocrine/metabolic,Other/residual,0,
+END011,Fluid and electrolyte disorders,Endocrine/metabolic,Other/residual,0,
+END012,Cystic fibrosis,Endocrine/metabolic,Other/residual,0,
+END013,Pituitary disorders,Endocrine/metabolic,Other/residual,0,
+END014,Postprocedural or postoperative endocrine or metabolic complication,Endocrine/metabolic,Other/residual,0,
+END015,Other specified and unspecified endocrine disorders,Endocrine/metabolic,Other/residual,0,
+END016,Other specified and unspecified nutritional and metabolic disorders,Endocrine/metabolic,Other/residual,0,
+END017,Sequela of malnutrition and other nutritional deficiencies,Endocrine/metabolic,Frailty/debility/FTT,0,reviewed(pgl): confirmed
+EXT001,External cause codes: cut/pierce; initial encounter,External causes,Other/residual,0,
+EXT002,External cause codes: drowning/submersion; initial encounter,External causes,Other/residual,0,
+EXT003,External cause codes: fall; initial encounter,External causes,Other/residual,0,
+EXT004,External cause codes: fire/burn; initial encounter,External causes,Other/residual,0,
+EXT005,External cause codes: firearm; initial encounter,External causes,Other/residual,0,
+EXT006,External cause codes: machinery; initial encounter,External causes,Other/residual,0,
+EXT007,External cause codes: motor vehicle traffic (MVT); initial encounter,External causes,Other/residual,0,
+EXT008,External cause codes: pedal cyclist; not MVT; initial encounter,External causes,Other/residual,0,
+EXT009,External cause codes: pedestrian; not MVT; initial encounter,External causes,Other/residual,0,
+EXT010,External cause codes: transport; not MVT; initial encounter,External causes,Other/residual,0,
+EXT011,External cause codes: natural/environment; initial encounter,External causes,Other/residual,0,
+EXT012,External cause codes: bites; initial encounter,External causes,Other/residual,0,
+EXT013,External cause codes: overexertion; initial encounter,External causes,Other/residual,0,
+EXT014,External cause codes: poisoning by drug,External causes,Other/residual,0,
+EXT015,External cause codes: poisoning by non-drug,External causes,Other/residual,0,
+EXT016,External cause codes: struck by; against; initial encounter,External causes,Other/residual,0,
+EXT017,External cause codes: suffocation/inhalation; initial encounter,External causes,Other/residual,0,
+EXT018,"External cause codes: other specified, classifiable and NEC; initial encounter",External causes,Other/residual,0,
+EXT019,External cause codes: unspecified mechanism,External causes,Other/residual,0,
+EXT020,"External cause codes: intent of injury, accidental/unintentional",External causes,Other/residual,0,
+EXT021,"External cause codes: intent of injury, self-harm",External causes,Other/residual,0,
+EXT022,"External cause codes: intent of injury, assault",External causes,Other/residual,0,
+EXT023,"External cause codes: intent of injury, undetermined",External causes,Other/residual,0,
+EXT024,"External cause codes: intent of injury, legal intervention/war",External causes,Other/residual,0,
+EXT025,"External cause codes: complications of medical and surgical care, initial encounter",External causes,Other/residual,0,
+EXT026,External cause codes: activity codes,External causes,Other/residual,0,
+EXT027,External cause codes: place of occurrence of the external cause,External causes,Other/residual,0,
+EXT028,External cause codes: evidence of alcohol involvement,External causes,Other/residual,0,
+EXT029,External cause codes: subsequent encounter,External causes,Other/residual,0,
+EXT030,External cause codes: sequela,External causes,Other/residual,0,
+EYE001,Cornea and external disease,Eye,Other/residual,0,
+EYE002,Cataract and other lens disorders,Eye,Other/residual,0,
+EYE003,Glaucoma,Eye,Other/residual,0,
+EYE004,Uveitis and ocular inflammation,Eye,Other/residual,0,
+EYE005,Retinal and vitreous conditions,Eye,Other/residual,0,
+EYE006,Neuro-ophthalmology,Eye,Other/residual,0,
+EYE007,Strabismus,Eye,Other/residual,0,
+EYE008,Oculofacial plastics and orbital conditions,Eye,Other/residual,0,
+EYE009,Refractive error,Eye,Other/residual,0,
+EYE010,Blindness and vision defects,Eye,Other/residual,0,
+EYE011,Postprocedural or postoperative eye complication,Eye,Other/residual,0,
+EYE012,Other specified eye disorders,Eye,Other/residual,0,
+FAC001,Encounter for administrative purposes,Factors infl health,Other/residual,0,
+FAC002,Encounter for mental health services related to abuse,Factors infl health,Other/residual,0,
+FAC003,"Encounter for observation and examination for conditions ruled out (excludes infectious disease, neoplasm, mental disorders)",Factors infl health,Other/residual,0,
+FAC004,Encounter for prophylactic or other procedures,Factors infl health,Other/residual,0,
+FAC005,Encounter for prophylactic measures (excludes immunization),Factors infl health,Other/residual,0,
+FAC006,Encounter for antineoplastic therapies,Factors infl health,Cancer/malignancy,0,reviewed(pgl): confirmed
+FAC007,Encounter for mental health conditions,Factors infl health,Other/residual,0,
+FAC008,Neoplasm-related encounters,Factors infl health,Cancer/malignancy,0,reviewed(pgl): confirmed
+FAC009,"Implant, device or graft related encounter",Factors infl health,Other/residual,0,
+FAC010,Other aftercare encounter,Factors infl health,Other/residual,0,
+FAC011,Counseling related to sexual behavior or orientation,Factors infl health,Other/residual,0,
+FAC012,Other specified encounters and counseling,Factors infl health,Other/residual,0,
+FAC013,Contraceptive and procreative management,Factors infl health,Other/residual,0,
+FAC014,Medical examination/evaluation,Factors infl health,Other/residual,0,
+FAC015,Resistance to antimicrobial drugs,Factors infl health,Other/residual,0,
+FAC016,"Exposure, encounters, screening or contact with infectious disease",Factors infl health,Other/residual,0,
+FAC017,No immunization or underimmunization,Factors infl health,Other/residual,0,
+FAC018,Screening for neurocognitive or neurodevelopmental condition,Factors infl health,Other/residual,0,
+FAC019,Socioeconomic/psychosocial factors,Factors infl health,Other/residual,0,
+FAC020,Lifestyle/life management factors,Factors infl health,Other/residual,0,
+FAC021,Personal/family history of disease (discontinued in v2025.1),Factors infl health,Other/residual,0,
+FAC022,Acquired absence of limb or organ,Factors infl health,Other/residual,0,
+FAC023,Organ transplant status,Factors infl health,Other/residual,0,
+FAC024,Carrier status,Factors infl health,Other/residual,0,
+FAC025,Other specified status,Factors infl health,Other/residual,0,
+FAC026,Personal history of nicotine dependence,Factors infl health,Other/residual,0,
+FAC027,Personal history of malignant neoplasm,Factors infl health,Other/residual,0,Personal hx of malignancy (status)
+FAC028,Family history of disease,Factors infl health,Other/residual,0,
+FAC029,Genetic susceptibility to disease,Factors infl health,Other/residual,0,
+FAC030,Personal history of other disease,Factors infl health,Other/residual,0,
+GEN001,Nephritis; nephrosis; renal sclerosis,Genitourinary,Other/residual,0,
+GEN002,Acute and unspecified renal failure,Genitourinary,Other/residual,0,reviewed(pgl): confirmed
+GEN003,Chronic kidney disease,Genitourinary,Chronic organ failure,0,reviewed(pgl): confirmed
+GEN004,Urinary tract infections,Genitourinary,Acute infection/sepsis,0,UTI
+GEN005,Calculus of urinary tract,Genitourinary,Other/residual,0,
+GEN006,Other specified and unspecified diseases of kidney and ureters,Genitourinary,Other/residual,0,
+GEN007,Other specified and unspecified diseases of bladder and urethra,Genitourinary,Other/residual,0,
+GEN008,Urinary incontinence,Genitourinary,Other/residual,0,
+GEN009,Hematuria,Genitourinary,Other/residual,0,
+GEN010,Proteinuria,Genitourinary,Other/residual,0,
+GEN011,Vesicoureteral reflux,Genitourinary,Other/residual,0,
+GEN012,Hyperplasia of prostate,Genitourinary,Other/residual,0,
+GEN013,Inflammatory conditions of male genital organs,Genitourinary,Acute infection/sepsis,0,reviewed(pgl): confirmed
+GEN014,Erectile dysfunction,Genitourinary,Other/residual,0,
+GEN015,Male infertility,Genitourinary,Other/residual,0,
+GEN016,Other specified male genital disorders,Genitourinary,Other/residual,0,
+GEN017,Nonmalignant breast conditions,Genitourinary,Other/residual,0,
+GEN018,Inflammatory diseases of female pelvic organs,Genitourinary,Acute infection/sepsis,0,reviewed(pgl): confirmed
+GEN019,Endometriosis,Genitourinary,Other/residual,0,
+GEN020,Prolapse of female genital organs,Genitourinary,Other/residual,0,
+GEN021,Menstrual disorders,Genitourinary,Other/residual,0,
+GEN022,Benign ovarian cyst,Genitourinary,Other/residual,0,
+GEN023,Menopausal disorders,Genitourinary,Other/residual,0,
+GEN024,Female infertility,Genitourinary,Other/residual,0,
+GEN025,Other specified female genital disorders,Genitourinary,Other/residual,0,
+GEN026,Postprocedural or postoperative genitourinary system complication,Genitourinary,Other/residual,0,
+INF001,Tuberculosis,Infectious,Acute infection/sepsis,0,
+INF002,Septicemia,Infectious,Acute infection/sepsis,0,
+INF003,Bacterial infections,Infectious,Acute infection/sepsis,0,
+INF004,Fungal infections,Infectious,Acute infection/sepsis,0,
+INF005,Foodborne intoxications,Infectious,Acute infection/sepsis,0,
+INF006,HIV infection,Infectious,Acute infection/sepsis,0,reviewed(pgl): confirmed
+INF007,Hepatitis,Infectious,Acute infection/sepsis,0,reviewer(pgl): other? there are chronic hepatidities…
+INF008,Viral infection,Infectious,Acute infection/sepsis,0,
+INF009,"Parasitic, other specified and unspecified infections",Infectious,Acute infection/sepsis,0,
+INF010,Sexually transmitted infections (excluding HIV and hepatitis),Infectious,Acute infection/sepsis,0,
+INF011,Sequela of specified infectious disease conditions,Infectious,Other/residual,0,reviewed(pgl): confirmed
+INF012,Coronavirus disease – 2019 (COVID-19),Infectious,Acute infection/sepsis,0,
+INJ001,"Fracture of head and neck, initial encounter",Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ002,"Fracture of the spine and back, initial encounter",Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ003,"Fracture of torso, initial encounter",Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ004,"Fracture of the upper limb, initial encounter",Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ005,"Fracture of the lower limb (except hip), initial encounter",Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ006,"Fracture of the neck of the femur (hip), initial encounter",Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ007,"Dislocations, initial encounter",Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ008,"Traumatic brain injury (TBI); concussion, initial encounter",Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ009,"Spinal cord injury (SCI), initial encounter",Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ010,"Internal organ injury, initial encounter",Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ011,"Open wounds of head and neck, initial encounter",Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ012,"Open wounds to limbs, initial encounter",Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ013,"Open wounds of trunk, initial encounter",Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ014,"Amputation of a limb, initial encounter",Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ015,"Amputation of other body parts, initial encounter",Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ016,"Injury to blood vessels, initial encounter",Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ017,"Superficial injury; contusion, initial encounter",Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ018,"Crushing injury, initial encounter",Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ019,"Burn and corrosion, initial encounter",Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ020,"Effect of foreign body entering opening, initial encounter",Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ021,"Effect of other external causes, initial encounter",Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ022,"Poisoning by drugs, initial encounter",Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ023,"Toxic effects, initial encounter",Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ024,"Sprains and strains, initial encounter",Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ025,"Injury to nerves, muscles and tendons, initial encounter",Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ026,Other specified injury,Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ027,Other unspecified injury,Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ028,"Adverse effects of drugs and medicaments, initial encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ029,"Underdosing of drugs and medicaments, initial encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ030,Drug induced or toxic related condition,Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ031,Allergic reactions,Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ032,Maltreatment/abuse,Injury/poisoning,Trauma/injury,0,Acute injury (initial)
+INJ033,"Complication of cardiovascular device, implant or graft, initial encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ034,"Complication of genitourinary device, implant or graft, initial encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ035,"Complication of internal orthopedic device or implant, initial encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ036,"Complication of transplanted organs or tissue, initial encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ037,"Complication of other surgical or medical care, injury, initial encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ038,"Fracture of head and neck, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ039,"Fracture of the spine and back, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ040,"Fracture of torso, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ041,"Fracture of the upper limb, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ042,"Fracture of lower limb (except hip), subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ043,"Fracture of the neck of the femur (hip), subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ044,"Dislocations, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ045,"Traumatic brain injury (TBI); concussion, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ046,"Spinal cord injury (SCI), subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ047,"Internal organ injury, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ048,"Open wounds of head and neck, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ049,"Open wounds to limbs, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ050,"Open wounds of trunk, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ051,"Amputation of a limb, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ052,"Amputation of other body parts, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ053,"Injury to blood vessels, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ054,"Superficial injury; contusion, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ055,"Crushing injury, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ056,"Burns and corrosion, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ057,"Effect of foreign body entering opening, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ058,"Effect of other external causes, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ059,"Poisoning by drugs, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ060,"Toxic effects, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ061,"Sprains and strains, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ062,"Injury to nerves, muscles and tendons, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ063,"Other specified injury, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ064,"Other unspecified injuries, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ065,"Adverse effects of drugs and medicaments, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ066,"Underdosing of drugs and medicaments, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ067,"Allergic reactions, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ068,"Maltreatment/abuse, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ069,"Complication of cardiovascular device, implant or graft, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ070,"Complication of genitourinary device, implant or graft, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ071,"Complication of internal orthopedic device or implant, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ072,"Complication of other surgical or medical care, injury, subsequent encounter",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ073,"Injury, sequela",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ074,"Effect of other external causes, sequela",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ075,"Poisoning/toxic effect/adverse effects/underdosing, sequela",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+INJ076,"Complication, sequela",Injury/poisoning,Other/residual,0,reviewed(pgl): confirmed
+MAL001,Cardiac and circulatory congenital anomalies,Congenital,Other/residual,0,
+MAL002,Digestive congenital anomalies,Congenital,Other/residual,0,
+MAL003,Genitourinary congenital anomalies,Congenital,Other/residual,0,
+MAL004,Nervous system congenital anomalies,Congenital,Other/residual,0,
+MAL005,"Congenital malformations of eye, ear, face, neck",Congenital,Other/residual,0,
+MAL006,Cleft lip or palate,Congenital,Other/residual,0,
+MAL007,Respiratory congenital malformations,Congenital,Other/residual,0,
+MAL008,Musculoskeletal congenital conditions,Congenital,Other/residual,0,
+MAL009,Chromosomal abnormalities,Congenital,Other/residual,0,
+MAL010,Other specified and unspecified congenital anomalies,Congenital,Other/residual,0,
+MBD001,Schizophrenia spectrum and other psychotic disorders,Mental/behavioral,Other/residual,0,
+MBD002,Depressive disorders,Mental/behavioral,Other/residual,0,
+MBD003,Bipolar and related disorders,Mental/behavioral,Other/residual,0,
+MBD004,Other specified and unspecified mood disorders,Mental/behavioral,Other/residual,0,
+MBD005,Anxiety and fear-related disorders,Mental/behavioral,Other/residual,0,
+MBD006,Obsessive-compulsive and related disorders,Mental/behavioral,Other/residual,0,
+MBD007,Trauma- and stressor-related disorders,Mental/behavioral,Other/residual,0,
+MBD008,"Disruptive, impulse-control and conduct disorders",Mental/behavioral,Other/residual,0,
+MBD009,Personality disorders,Mental/behavioral,Other/residual,0,
+MBD010,Feeding and eating disorders,Mental/behavioral,Other/residual,0,
+MBD011,Somatic disorders,Mental/behavioral,Other/residual,0,
+MBD012,Suicidal ideation/attempt/intentional self-harm,Mental/behavioral,Other/residual,0,
+MBD013,Miscellaneous mental and behavioral disorders/conditions,Mental/behavioral,Other/residual,0,
+MBD014,Neurodevelopmental disorders,Mental/behavioral,Dementia/neurodegenerative/neurodevelopmental,0,moved to neurodevelopmental (reviewer Q on NVS011)
+MBD017,Alcohol-related disorders,Mental/behavioral,Other/residual,0,
+MBD018,Opioid-related disorders,Mental/behavioral,Other/residual,0,
+MBD019,Cannabis-related disorders,Mental/behavioral,Other/residual,0,
+MBD020,Sedative-related disorders,Mental/behavioral,Other/residual,0,
+MBD021,Stimulant-related disorders,Mental/behavioral,Other/residual,0,
+MBD022,Hallucinogen-related disorders,Mental/behavioral,Other/residual,0,
+MBD023,Inhalant-related disorders,Mental/behavioral,Other/residual,0,
+MBD024,Tobacco-related disorders,Mental/behavioral,Other/residual,0,
+MBD025,Other specified substance-related disorders,Mental/behavioral,Other/residual,0,
+MBD026,Mental and substance use disorders in remission,Mental/behavioral,Other/residual,0,
+MBD027,Suicide attempt/intentional self-harm; subsequent encounter,Mental/behavioral,Other/residual,0,
+MBD028,Opioid-related disorders; subsequent encounter,Mental/behavioral,Other/residual,0,
+MBD029,Stimulant-related disorders; subsequent encounter,Mental/behavioral,Other/residual,0,
+MBD030,Cannabis-related disorders; subsequent encounter,Mental/behavioral,Other/residual,0,
+MBD031,Hallucinogen-related disorders; subsequent encounter,Mental/behavioral,Other/residual,0,
+MBD032,Sedative-related disorders; subsequent encounter,Mental/behavioral,Other/residual,0,
+MBD033,Inhalant-related disorders; subsequent encounter,Mental/behavioral,Other/residual,0,
+MBD034,Mental and substance use disorders; sequela,Mental/behavioral,Other/residual,0,
+MUS001,Infective arthritis,Musculoskeletal,Acute infection/sepsis,0,reviewed(pgl): confirmed
+MUS002,Osteomyelitis,Musculoskeletal,Acute infection/sepsis,0,reviewed(pgl): confirmed
+MUS003,Rheumatoid arthritis and related disease,Musculoskeletal,Other/residual,0,
+MUS004,Juvenile arthritis,Musculoskeletal,Other/residual,0,
+MUS005,Other specified chronic arthropathy,Musculoskeletal,Other/residual,0,
+MUS006,Osteoarthritis,Musculoskeletal,Other/residual,0,
+MUS007,Other specified joint disorders,Musculoskeletal,Other/residual,0,
+MUS008,Immune-mediated/reactive arthropathies,Musculoskeletal,Other/residual,0,
+MUS009,Tendon and synovial disorders,Musculoskeletal,Other/residual,0,
+MUS010,"Musculoskeletal pain, not low back pain",Musculoskeletal,Other/residual,0,
+MUS011,Spondylopathies/spondyloarthropathy (including infective),Musculoskeletal,Other/residual,0,
+MUS012,Biomechanical lesions,Musculoskeletal,Other/residual,0,
+MUS013,Osteoporosis,Musculoskeletal,Other/residual,0,
+MUS014,"Pathological fracture, initial encounter",Musculoskeletal,Other/residual,0,
+MUS015,"Pathological fracture, subsequent encounter",Musculoskeletal,Other/residual,0,
+MUS016,"Stress fracture, initial encounter",Musculoskeletal,Other/residual,0,
+MUS017,"Stress fracture, subsequent encounter",Musculoskeletal,Other/residual,0,
+MUS018,"Atypical fracture, initial encounter",Musculoskeletal,Other/residual,0,
+MUS019,"Atypical fracture, subsequent encounter",Musculoskeletal,Other/residual,0,
+MUS020,"Pathological, stress and atypical fractures, sequela",Musculoskeletal,Other/residual,0,
+MUS021,Acquired foot deformities,Musculoskeletal,Other/residual,0,
+MUS022,Scoliosis and other postural dorsopathic deformities,Musculoskeletal,Other/residual,0,
+MUS023,Acquired deformities (excluding foot),Musculoskeletal,Other/residual,0,
+MUS024,Systemic lupus erythematosus and connective tissue disorders,Musculoskeletal,Other/residual,0,
+MUS025,Other specified connective tissue disease,Musculoskeletal,Other/residual,0,
+MUS026,Muscle disorders,Musculoskeletal,Other/residual,0,reviewed(pgl): confirmed
+MUS027,Musculoskeletal abscess,Musculoskeletal,Acute infection/sepsis,0,reviewed(pgl): confirmed
+MUS028,Other specified bone disease and musculoskeletal deformities,Musculoskeletal,Other/residual,0,
+MUS029,Disorders of jaw,Musculoskeletal,Other/residual,0,
+MUS030,Aseptic necrosis and osteonecrosis,Musculoskeletal,Other/residual,0,
+MUS031,Traumatic arthropathy,Musculoskeletal,Other/residual,0,
+MUS032,Neurogenic/neuropathic arthropathy,Musculoskeletal,Other/residual,0,
+MUS033,Gout,Musculoskeletal,Other/residual,0,
+MUS034,Crystal arthropathies (excluding gout),Musculoskeletal,Other/residual,0,
+MUS035,Osteomalacia,Musculoskeletal,Other/residual,0,
+MUS036,Autoinflammatory syndromes,Musculoskeletal,Other/residual,0,
+MUS037,Postprocedural or postoperative musculoskeletal system complication,Musculoskeletal,Other/residual,0,
+MUS038,Low back pain,Musculoskeletal,Other/residual,0,
+NEO001,Head and neck cancers - eye,Neoplasms,Cancer/malignancy,0,
+NEO002,Head and neck cancers - lip and oral cavity,Neoplasms,Cancer/malignancy,0,
+NEO003,Head and neck cancers - throat,Neoplasms,Cancer/malignancy,0,
+NEO004,Head and neck cancers - salivary gland,Neoplasms,Cancer/malignancy,0,
+NEO005,Head and neck cancers - nasopharyngeal,Neoplasms,Cancer/malignancy,0,
+NEO006,Head and neck cancers - hypopharyngeal,Neoplasms,Cancer/malignancy,0,
+NEO007,Head and neck cancers - pharyngeal,Neoplasms,Cancer/malignancy,0,
+NEO008,Head and neck cancers - laryngeal,Neoplasms,Cancer/malignancy,0,
+NEO009,Head and neck cancers - tonsils,Neoplasms,Cancer/malignancy,0,
+NEO010,Head and neck cancers - all other types,Neoplasms,Cancer/malignancy,0,
+NEO011,Cardiac cancers,Neoplasms,Cancer/malignancy,0,
+NEO012,Gastrointestinal cancers - esophagus,Neoplasms,Cancer/malignancy,0,
+NEO013,Gastrointestinal cancers - stomach,Neoplasms,Cancer/malignancy,0,
+NEO014,Gastrointestinal cancers - small intestine,Neoplasms,Cancer/malignancy,0,
+NEO015,Gastrointestinal cancers - colorectal,Neoplasms,Cancer/malignancy,0,
+NEO016,Gastrointestinal cancers - anus,Neoplasms,Cancer/malignancy,0,
+NEO017,Gastrointestinal cancers - liver,Neoplasms,Cancer/malignancy,0,
+NEO018,Gastrointestinal cancers - bile duct,Neoplasms,Cancer/malignancy,0,
+NEO019,Gastrointestinal cancers - gallbladder,Neoplasms,Cancer/malignancy,0,
+NEO020,Gastrointestinal cancers - peritoneum,Neoplasms,Cancer/malignancy,0,
+NEO021,Gastrointestinal cancers - all other types,Neoplasms,Cancer/malignancy,0,
+NEO022,Respiratory cancers,Neoplasms,Cancer/malignancy,0,
+NEO023,Bone cancer,Neoplasms,Cancer/malignancy,0,
+NEO024,Sarcoma,Neoplasms,Cancer/malignancy,0,
+NEO025,Skin cancers - melanoma,Neoplasms,Cancer/malignancy,0,
+NEO026,Skin cancers - basal cell carcinoma,Neoplasms,Cancer/malignancy,0,
+NEO027,Skin cancers - squamous cell carcinoma,Neoplasms,Cancer/malignancy,0,
+NEO028,Skin cancers - all other types,Neoplasms,Cancer/malignancy,0,
+NEO029,Breast cancer - ductal carcinoma in situ (DCIS),Neoplasms,Cancer/malignancy,0,
+NEO030,Breast cancer - all other types,Neoplasms,Cancer/malignancy,0,
+NEO031,Female reproductive system cancers - uterus,Neoplasms,Cancer/malignancy,0,
+NEO032,Female reproductive system cancers - cervix,Neoplasms,Cancer/malignancy,0,
+NEO033,Female reproductive system cancers - ovary,Neoplasms,Cancer/malignancy,0,
+NEO034,Female reproductive system cancers - fallopian tube,Neoplasms,Cancer/malignancy,0,
+NEO035,Female reproductive system cancers - endometrium,Neoplasms,Cancer/malignancy,0,
+NEO036,Female reproductive system cancers - vulva,Neoplasms,Cancer/malignancy,0,
+NEO037,Female reproductive system cancers - vagina,Neoplasms,Cancer/malignancy,0,
+NEO038,Female reproductive system cancers - all other types,Neoplasms,Cancer/malignancy,0,
+NEO039,Male reproductive system cancers - prostate,Neoplasms,Cancer/malignancy,0,
+NEO040,Male reproductive system cancers - testis,Neoplasms,Cancer/malignancy,0,
+NEO041,Male reproductive system cancers - penis,Neoplasms,Cancer/malignancy,0,
+NEO042,Male reproductive system cancers - all other types,Neoplasms,Cancer/malignancy,0,
+NEO043,Urinary system cancers - bladder,Neoplasms,Cancer/malignancy,0,
+NEO044,Urinary system cancers - ureter and renal pelvis,Neoplasms,Cancer/malignancy,0,
+NEO045,Urinary system cancers - kidney,Neoplasms,Cancer/malignancy,0,
+NEO046,Urinary system cancers - urethra,Neoplasms,Cancer/malignancy,0,
+NEO047,Urinary system cancers - all other types,Neoplasms,Cancer/malignancy,0,
+NEO048,Nervous system cancers - brain,Neoplasms,Cancer/malignancy,0,
+NEO049,Nervous system cancers - all other types,Neoplasms,Cancer/malignancy,0,
+NEO050,Endocrine system cancers - thyroid,Neoplasms,Cancer/malignancy,0,
+NEO051,Endocrine system cancers - pancreas,Neoplasms,Cancer/malignancy,0,
+NEO052,Endocrine system cancers - thymus,Neoplasms,Cancer/malignancy,0,
+NEO053,Endocrine system cancers - adrenocortical,Neoplasms,Cancer/malignancy,0,
+NEO054,Endocrine system cancers - parathyroid,Neoplasms,Cancer/malignancy,0,
+NEO055,Endocrine system cancers - pituitary gland,Neoplasms,Cancer/malignancy,0,
+NEO056,Endocrine system cancers - all other types,Neoplasms,Cancer/malignancy,0,
+NEO057,Hodgkin lymphoma,Neoplasms,Cancer/malignancy,0,
+NEO058,Non-Hodgkin lymphoma,Neoplasms,Cancer/malignancy,0,
+NEO059,Leukemia - acute lymphoblastic leukemia (ALL),Neoplasms,Cancer/malignancy,0,
+NEO060,Leukemia - acute myeloid leukemia (AML),Neoplasms,Cancer/malignancy,0,
+NEO061,Leukemia - chronic lymphocytic leukemia (CLL),Neoplasms,Cancer/malignancy,0,
+NEO062,Leukemia - chronic myeloid leukemia (CML),Neoplasms,Cancer/malignancy,0,
+NEO063,Leukemia - hairy cell,Neoplasms,Cancer/malignancy,0,
+NEO064,Leukemia - all other types,Neoplasms,Cancer/malignancy,0,
+NEO065,Multiple myeloma,Neoplasms,Cancer/malignancy,0,
+NEO066,Malignant neuroendocrine tumors,Neoplasms,Cancer/malignancy,0,
+NEO067,Mesothelioma,Neoplasms,Cancer/malignancy,0,
+NEO068,Myelodysplastic syndrome (MDS),Neoplasms,Cancer/malignancy,0,
+NEO069,Cancer of other sites,Neoplasms,Cancer/malignancy,0,
+NEO070,Secondary malignancies,Neoplasms,Cancer/malignancy,0,
+NEO071,"Malignant neoplasm, unspecified",Neoplasms,Cancer/malignancy,0,
+NEO072,Neoplasms of unspecified nature or uncertain behavior,Neoplasms,Other/residual,0,reviewed(pgl): confirmed
+NEO073,Benign neoplasms,Neoplasms,Other/residual,0,Benign neoplasm
+NEO074,Conditions due to neoplasm or the treatment of neoplasm,Neoplasms,Cancer/malignancy,0,reviewed(pgl): confirmed
+NEO075,Leukemia in remission,Neoplasms,Cancer in remission,0,reviewer(pgl) Q resolved: remission mapped separately
+NEO076,Hodgkin lymphoma in remission,Neoplasms,Cancer in remission,0,remission mapped separately
+NEO077,Non-Hodgkin lymphoma in remission,Neoplasms,Cancer in remission,0,remission mapped separately
+NEO078,Myeloma in remission,Neoplasms,Cancer in remission,0,remission mapped separately
+NVS001,Meningitis,Nervous system,Acute infection/sepsis,0,reviewed(pgl): confirmed
+NVS002,Encephalitis,Nervous system,Acute infection/sepsis,0,reviewed(pgl): confirmed
+NVS003,Other specified CNS infection and poliomyelitis,Nervous system,Acute infection/sepsis,0,reviewed(pgl): confirmed
+NVS004,Parkinson's disease,Nervous system,Dementia/neurodegenerative/neurodevelopmental,0,Parkinson's
+NVS005,Multiple sclerosis,Nervous system,Dementia/neurodegenerative/neurodevelopmental,0,Multiple sclerosis
+NVS006,Other nervous system disorders (often hereditary or degenerative),Nervous system,Dementia/neurodegenerative/neurodevelopmental,0,reviewed(pgl): confirmed
+NVS007,Cerebral palsy,Nervous system,Dementia/neurodegenerative/neurodevelopmental,0,cerebral palsy -> neurodevelopmental
+NVS008,Paralysis (other than cerebral palsy),Nervous system,Other/residual,0,reviewed(pgl): confirmed
+NVS009,Epilepsy; convulsions,Nervous system,Acute neurological,0,reviewed(pgl): confirmed
+NVS010,Headache; including migraine,Nervous system,Other/residual,0,
+NVS011,Neurocognitive disorders,Nervous system,Dementia/neurodegenerative/neurodevelopmental,0,reviewer(pgl) Q resolved: broadened to include neurodevelopmental
+NVS012,Transient cerebral ischemia,Nervous system,Acute neurological,0,reviewed(pgl): confirmed
+NVS013,Coma; stupor; and brain damage,Nervous system,Acute neurological,0,Coma/stupor/brain damage (incl anoxic injury)
+NVS014,CNS abscess,Nervous system,Acute infection/sepsis,0,reviewed(pgl): confirmed
+NVS015,Polyneuropathies,Nervous system,Other/residual,0,reviewed(pgl): confirmed
+NVS016,Sleep wake disorders,Nervous system,Other/residual,0,
+NVS017,Nerve and nerve root disorders,Nervous system,Other/residual,0,
+NVS018,Myopathies,Nervous system,Other/residual,0,reviewed(pgl): confirmed
+NVS019,Nervous system pain and pain syndromes,Nervous system,Other/residual,0,
+NVS020,Other nervous system disorders (neither hereditary nor degenerative),Nervous system,Other/residual,0,
+NVS021,Postprocedural or postoperative nervous system complication,Nervous system,Other/residual,0,
+NVS022,Sequela of specified nervous system conditions,Nervous system,Other/residual,0,
+PNL001,Liveborn,Perinatal,Other/residual,0,
+PNL002,Short gestation; low birth weight; and fetal growth retardation,Perinatal,Other/residual,0,
+PNL003,Neonatal acidemia and hypoxia,Perinatal,Other/residual,0,
+PNL004,Neonatal cerebral disorders,Perinatal,Other/residual,0,
+PNL005,Respiratory distress syndrome,Perinatal,Other/residual,0,
+PNL006,Respiratory perinatal condition,Perinatal,Other/residual,0,
+PNL007,Hemolytic jaundice and perinatal jaundice,Perinatal,Other/residual,0,
+PNL008,Birth trauma,Perinatal,Other/residual,0,
+PNL009,Perinatal infections,Perinatal,Other/residual,0,
+PNL010,Newborn affected by maternal conditions or complications of labor/delivery,Perinatal,Other/residual,0,
+PNL011,Hemorrhagic and hematologic disorders of newborn,Perinatal,Other/residual,0,
+PNL012,Neonatal digestive and feeding disorders,Perinatal,Other/residual,0,
+PNL013,Other specified and unspecified perinatal conditions,Perinatal,Other/residual,0,
+PNL014,Neonatal abstinence syndrome,Perinatal,Other/residual,0,
+PNL015,Fetal alcohol syndrome,Perinatal,Other/residual,0,
+PRG001,Antenatal screening,Pregnancy,Peripartum/pregnancy,0,
+PRG002,Gestational weeks,Pregnancy,Peripartum/pregnancy,0,
+PRG003,Spontaneous abortion and complications of spontaneous abortion,Pregnancy,Peripartum/pregnancy,0,
+PRG004,Induced abortion and complications of termination of pregnancy,Pregnancy,Peripartum/pregnancy,0,
+PRG005,Ectopic pregnancy and complications of ectopic pregnancy,Pregnancy,Peripartum/pregnancy,0,
+PRG006,Molar pregnancy and other abnormal products of conception,Pregnancy,Peripartum/pregnancy,0,
+PRG007,Complications following ectopic and/or molar pregnancy,Pregnancy,Peripartum/pregnancy,0,
+PRG008,Supervision of high-risk pregnancy,Pregnancy,Peripartum/pregnancy,0,
+PRG009,"Early, first or unspecified trimester hemorrhage",Pregnancy,Peripartum/pregnancy,0,
+PRG010,Hemorrhage after first trimester,Pregnancy,Peripartum/pregnancy,0,
+PRG011,Early or threatened labor,Pregnancy,Peripartum/pregnancy,0,
+PRG012,Multiple gestation,Pregnancy,Peripartum/pregnancy,0,
+PRG013,Maternal care related to fetal conditions,Pregnancy,Peripartum/pregnancy,0,
+PRG014,Polyhydramnios and other problems of amniotic cavity,Pregnancy,Peripartum/pregnancy,0,
+PRG015,Obstetric history affecting care in pregnancy,Pregnancy,Peripartum/pregnancy,0,
+PRG016,Previous C-section,Pregnancy,Peripartum/pregnancy,0,
+PRG017,Maternal care for abnormality of pelvic organs,Pregnancy,Peripartum/pregnancy,0,
+PRG018,Maternal care related to disorders of the placenta and placental implantation,Pregnancy,Peripartum/pregnancy,0,
+PRG019,Diabetes or abnormal glucose tolerance complicating pregnancy; childbirth; or the puerperium,Pregnancy,Peripartum/pregnancy,0,
+PRG020,Hypertension and hypertensive-related conditions complicating pregnancy; childbirth; and the puerperium,Pregnancy,Peripartum/pregnancy,0,
+PRG021,Maternal intrauterine infection,Pregnancy,Peripartum/pregnancy,0,
+PRG022,Prolonged pregnancy,Pregnancy,Peripartum/pregnancy,0,
+PRG023,Complications specified during childbirth,Pregnancy,Peripartum/pregnancy,0,
+PRG024,"Malposition, disproportion or other labor complications",Pregnancy,Peripartum/pregnancy,0,
+PRG025,Anesthesia complications during pregnancy,Pregnancy,Peripartum/pregnancy,0,
+PRG026,OB-related trauma to perineum and vulva,Pregnancy,Peripartum/pregnancy,0,
+PRG027,Complications specified during the puerperium,Pregnancy,Peripartum/pregnancy,0,
+PRG028,Other specified complications in pregnancy,Pregnancy,Peripartum/pregnancy,0,
+PRG029,"Uncomplicated pregnancy, delivery or puerperium",Pregnancy,Peripartum/pregnancy,0,
+PRG030,Maternal outcome of delivery,Pregnancy,Peripartum/pregnancy,0,
+RSP001,Sinusitis,Respiratory,Acute infection/sepsis,0,Sinusitis
+RSP002,Pneumonia (except that caused by tuberculosis),Respiratory,Acute infection/sepsis,0,Pneumonia
+RSP003,Influenza,Respiratory,Acute infection/sepsis,0,Influenza
+RSP004,Acute and chronic tonsillitis,Respiratory,Acute infection/sepsis,0,Tonsillitis
+RSP005,Acute bronchitis,Respiratory,Acute infection/sepsis,0,Acute bronchitis
+RSP006,Other specified upper respiratory infections,Respiratory,Acute infection/sepsis,0,Other URI
+RSP007,Other specified and unspecified upper respiratory disease,Respiratory,Other/residual,0,
+RSP008,Chronic obstructive pulmonary disease and bronchiectasis,Respiratory,Chronic organ failure,0,COPD/bronchiectasis
+RSP009,Asthma,Respiratory,Other/residual,0,reviewer(pgl): acute noninfectious respiratory
+RSP010,Aspiration pneumonitis,Respiratory,Acute noninfectious respiratory,0,reviewed(pgl): confirmed
+RSP011,"Pleurisy, pleural effusion and pulmonary collapse",Respiratory,Acute noninfectious respiratory,0,reviewed(pgl): confirmed
+RSP012,Respiratory failure; insufficiency; arrest,Respiratory,Acute noninfectious respiratory,0,Respiratory failure/insufficiency/arrest
+RSP013,Lung disease due to external agents,Respiratory,Other/residual,0,reviewer(pgl): acute noninfectious respiratory
+RSP014,Pneumothorax,Respiratory,Acute noninfectious respiratory,0,Pneumothorax
+RSP015,Mediastinal disorders,Respiratory,Other/residual,0,
+RSP016,Other specified and unspecified lower respiratory disease,Respiratory,Other/residual,0,
+RSP017,Postprocedural or postoperative respiratory system complication,Respiratory,Other/residual,0,
+SKN001,Skin and subcutaneous tissue infections,Skin,Acute infection/sepsis,0,Skin/soft-tissue infection
+SKN002,Other specified inflammatory condition of skin,Skin,Other/residual,0,
+SKN003,Pressure ulcer of skin,Skin,Other/residual,0,
+SKN004,Non-pressure ulcer of skin,Skin,Other/residual,0,
+SKN005,Contact dermatitis,Skin,Other/residual,0,
+SKN006,Postprocedural or postoperative skin complication,Skin,Other/residual,0,
+SKN007,Other specified and unspecified skin disorders,Skin,Other/residual,0,
+SYM001,Syncope,Symptoms,Other/residual,0,
+SYM002,Fever,Symptoms,Other/residual,0,
+SYM003,Shock,Symptoms,Other/residual,0,reviewed(pgl): confirmed
+SYM004,Nausea and vomiting,Symptoms,Other/residual,0,
+SYM005,Dysphagia,Symptoms,Other/residual,0,
+SYM006,Abdominal pain and other digestive/abdomen signs and symptoms,Symptoms,Other/residual,0,
+SYM007,Malaise and fatigue,Symptoms,Frailty/debility/FTT,0,"Malaise, fatigue, debility (R53.x)"
+SYM008,Symptoms of mental and substance use conditions,Symptoms,Other/residual,0,
+SYM009,Abnormal findings related to substance use,Symptoms,Other/residual,0,
+SYM010,Nervous system signs and symptoms,Symptoms,Other/residual,0,
+SYM011,Genitourinary signs and symptoms,Symptoms,Other/residual,0,
+SYM012,Circulatory signs and symptoms,Symptoms,Other/residual,0,
+SYM013,Respiratory signs and symptoms,Symptoms,Other/residual,0,
+SYM014,Skin/Subcutaneous signs and symptoms,Symptoms,Other/residual,0,
+SYM015,General sensation/perception signs and symptoms,Symptoms,Other/residual,0,
+SYM016,Other general signs and symptoms,Symptoms,Other/residual,1,NOT in review sheet; provisional Other/residual — needs review
+SYM017,Abnormal findings without diagnosis,Symptoms,Other/residual,0,
+SYM018,Prediabetes,Symptoms,Other/residual,0,
+SYM019,Flank pain and tenderness,Symptoms,Other/residual,0,
+XXX000,Code is unacceptable as a principal diagnosis PDX (only used for the inpatient default CCSR),Unacceptable PDX,Other/residual,0,
+XXX111,Code is unacceptable as a first-listed diagnosis DX1 (only used for the outpatient default CCSR),Unacceptable PDX,Other/residual,0,
