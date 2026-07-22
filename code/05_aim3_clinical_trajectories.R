@@ -33,7 +33,7 @@
 #   aim3_lst_vs_nonlst_km_{site}.pdf
 
 
-# Last updated bpe 16.07.2026
+# Last updated bpe 22.07.2026
 
 
 # 0. setup ---------------------------------------------------------------------
@@ -334,6 +334,9 @@ for (grp in unique(trajectory_summary$comparison_group)) {
 }
 message("====================================================================\n")
 
+if (isTRUE(suppress_small_cells_enabled))
+  trajectory_summary = suppress_small_cells(trajectory_summary,
+                                            count_cols = "n", pct_cols = "pct")
 fwrite(
   trajectory_summary,
   shareable_path(
