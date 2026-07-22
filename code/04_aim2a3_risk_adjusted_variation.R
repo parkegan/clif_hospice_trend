@@ -1,5 +1,5 @@
 
-# 06_aim2a3_risk_adjusted_variation.R
+# 04_aim2a3_risk_adjusted_variation.R
 # Aim 2A.3: Risk-adjusted hospital-level variation in discharge disposition
 # Protocol v5.0 Section 3.6.2
 
