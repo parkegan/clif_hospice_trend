@@ -42,7 +42,7 @@
 # Output: one row per hospitalization_id with all component flags,
 #         composites, inflection point timing, and Aim 3 variables
 
-# Last updated bpe 16.07.2026
+# Last updated bpe 22.07.2026
 
 
 # 0. setup ---------------------------------------------------------------------
@@ -204,6 +204,176 @@ nonfull_timing = all_cs[
   .(first_nonfull_dttm = min(start_dttm)),
   by = hospitalization_id
 ]
+
+# QI diagnostic: comfort-order capture FUNNEL. When first_comfort_dttm is NA for
+# nearly everyone, code_status_sequence (Aim 3) collapses to a single "No comfort
+# order" level. The funnel separates the possible causes, which have different
+# remedies:
+#   (i)   no comfort orders exist at all              -> DATA gap (documented elsewhere)
+#   (ii)  they exist but belong to non-cohort patients -> cohort restriction, expected
+#   (iii) they exist for cohort patients but sit outside [admission, endpoint]
+#         -> WINDOWING gap; standing/pre-admission orders (POLST, outpatient AND)
+#            are the usual cause, and are arguably baseline status rather than an
+#            in-hospital transition
+#   (iv)  they land in-window but not in the LST + hospice subset Aim 3 reports on
+#         -> the counts are simply too small to intersect
+cs_comfort           = code_status[cs_category == "Comfort-focused"]
+n_comfort_classified = nrow(cs_comfort)
+n_comfort_cohort     = cs_comfort[patient_id %in% ref$patient_id, .N]
+n_enc_comfort_window = nrow(comfort_timing)
+
+message("  Comfort-order capture funnel:")
+message(sprintf("    %s order(s) classified Comfort-focused (all patients)",
+                format(n_comfort_classified, big.mark = ",")))
+message(sprintf("    %s of those belong to cohort patients",
+                format(n_comfort_cohort, big.mark = ",")))
+message(sprintf("    %s cohort encounter(s) with a comfort order inside [admission, endpoint]",
+                format(n_enc_comfort_window, big.mark = ",")))
+
+# where do the out-of-window orders sit relative to the patient's encounters?
+if (n_comfort_cohort > 0L) {
+  cf = merge(cs_comfort[, .(patient_id, start_dttm)],
+             ref[, .(patient_id, admission_dttm, endpoint_dttm)],
+             by = "patient_id", allow.cartesian = TRUE)
+  cf[, in_win := start_dttm >= admission_dttm & start_dttm <= endpoint_dttm]
+  ord = cf[, .(any_in     = any(in_win),
+               all_before = all(start_dttm < admission_dttm),
+               all_after  = all(start_dttm > endpoint_dttm),
+               days_before_first_adm = as.numeric(
+                 difftime(min(admission_dttm), start_dttm[1], units = "days"))),
+           by = .(patient_id, start_dttm)]
+  n_before = ord[!any_in & all_before, .N]
+  n_after  = ord[!any_in & all_after,  .N]
+  med_lead = ord[!any_in & all_before, median(days_before_first_adm, na.rm = TRUE)]
+  message(sprintf("    out-of-window: %s before every admission (median %s days earlier), %s after every endpoint",
+                  format(n_before, big.mark = ","),
+                  if (is.finite(med_lead)) round(med_lead, 1) else NA,
+                  format(n_after, big.mark = ",")))
+  suppressWarnings(rm(cf, ord))
+}
+
+# do the in-window encounters even reach the Aim 3 LST + hospice denominator?
+if (n_enc_comfort_window > 0L && "lst_any_flag" %in% names(cohort)) {
+  cw_ids        = comfort_timing$hospitalization_id
+  n_cw_lst      = cohort[hospitalization_id %in% cw_ids & lst_any_flag == 1L, .N]
+  n_cw_lst_hosp = cohort[hospitalization_id %in% cw_ids & lst_any_flag == 1L &
+                           !is.na(hospice_transition_dttm), .N]
+  message(sprintf("    of those, %s are LST encounters and %s are LST + hospice (the Aim 3 denominator)",
+                  format(n_cw_lst, big.mark = ","), format(n_cw_lst_hosp, big.mark = ",")))
+  if (n_cw_lst_hosp == 0L)
+    message("    QI: no in-window comfort order falls in the LST + hospice subset, so ",
+            "code_status_sequence collapses to a single \"No comfort order\" level.")
+}
+
+if (n_comfort_classified == 0L) {
+  message("    QI: no code_status values map to Comfort-focused. Comfort care may be ",
+          "documented outside code_status at this site; Aim 3 comfort timing will be empty.")
+} else if (n_enc_comfort_window == 0L) {
+  message("    QI: comfort orders EXIST but none fall within [admission, endpoint] -> ",
+          "windowing gap (likely pre-admission standing orders). Aim 3 comfort timing will be empty.")
+} else if (n_enc_comfort_window < 0.02 * n_comfort_classified) {
+  message("    QI: only a small fraction of comfort orders land in-window -> ",
+          "review the endpoint window before interpreting Aim 3 comfort sequencing.")
+}
+suppressWarnings(rm(cs_comfort))
+
+## Comfort status at admission, and comfort-order timing descriptives ----------
+# comfort_preexisting: the code status IN EFFECT AT ADMISSION is comfort-focused,
+# i.e. the most recent order at or before admission_dttm is comfort-focused. A
+# later Full or Limited order supersedes an earlier one, so taking the LAST order
+# at or before admission is what "in effect" means. This separates patients who
+# ARRIVED comfort-focused (standing POLST / AND directives) from those who
+# converted during the stay -- the distinction the Aim 3 sequence table could not
+# make when every encounter collapsed to "No comfort order".
+# NOTE: 04 builds preexisting_code_status on a wider admission + 24h window for
+# risk adjustment, so the two variables are related but will not agree exactly.
+cs_adm = merge(
+  code_status[, .(patient_id, start_dttm, cs_category)],
+  ref[, .(hospitalization_id, patient_id, admission_dttm)],
+  by = "patient_id", allow.cartesian = TRUE
+)
+cs_adm = cs_adm[start_dttm <= admission_dttm]
+setorder(cs_adm, hospitalization_id, start_dttm)
+cs_adm = cs_adm[, .SD[.N], by = hospitalization_id]   # the order in effect at admission
+comfort_preexist = cs_adm[, .(hospitalization_id,
+                              comfort_preexisting = as.integer(cs_category == "Comfort-focused"))]
+suppressWarnings(rm(cs_adm))
+
+# Encounter-level descriptives over the FULL cohort. Timing is measured on the
+# first comfort order placed DURING the encounter; both quantities are signed so
+# that positive means "hours after admission" and "hours before the endpoint".
+# The endpoint is death where the patient died, otherwise discharge, which is the
+# clinically meaningful anchor for an end-of-life cohort.
+cdesc = ref[, .(hospitalization_id, admission_dttm, endpoint_dttm)]
+cdesc = merge(cdesc, comfort_preexist, by = "hospitalization_id", all.x = TRUE)
+cdesc[is.na(comfort_preexisting), comfort_preexisting := 0L]
+cdesc = merge(cdesc, comfort_timing, by = "hospitalization_id", all.x = TRUE)
+cdesc[, comfort_during := as.integer(!is.na(first_comfort_dttm))]
+cdesc[, comfort_at_adm_or_during := as.integer(comfort_preexisting == 1L | comfort_during == 1L)]
+cdesc[, hours_adm_to_comfort  := as.numeric(difftime(first_comfort_dttm, admission_dttm,
+                                                     units = "hours"))]
+cdesc[, hours_comfort_to_endpoint := as.numeric(difftime(endpoint_dttm, first_comfort_dttm,
+                                                         units = "hours"))]
+
+.cd_count = function(label, k, denom) data.table(
+  metric = label, n = as.integer(k),
+  pct    = if (is.na(denom) || denom == 0) NA_real_ else round(100 * k / denom, 2),
+  mean = NA_real_, median = NA_real_, sd = NA_real_,
+  q1 = NA_real_, q3 = NA_real_, iqr = NA_real_)
+
+.cd_stat = function(label, x) {
+  x = x[is.finite(x)]
+  if (!length(x)) return(.cd_count(label, 0L, NA_real_))
+  qq = stats::quantile(x, c(0.25, 0.75), na.rm = TRUE)
+  data.table(
+    metric = label, n = length(x), pct = NA_real_,
+    mean   = round(mean(x), 1),
+    median = round(stats::median(x), 1),
+    sd     = if (length(x) > 1L) round(stats::sd(x), 1) else NA_real_,
+    q1     = round(qq[[1]], 1), q3 = round(qq[[2]], 1),
+    iqr    = round(qq[[2]] - qq[[1]], 1))
+}
+
+n_enc_cd = nrow(cdesc)
+comfort_desc = rbindlist(list(
+  .cd_count("Cohort encounters", n_enc_cd, n_enc_cd),
+  .cd_count("Comfort status in effect at admission",
+            sum(cdesc$comfort_preexisting), n_enc_cd),
+  .cd_count("Comfort order placed during admission",
+            sum(cdesc$comfort_during), n_enc_cd),
+  .cd_count("Comfort status at admission or during admission",
+            sum(cdesc$comfort_at_adm_or_during), n_enc_cd),
+  .cd_stat("Hours from admission to first comfort order",  cdesc$hours_adm_to_comfort),
+  .cd_stat("Hours from first comfort order to endpoint (death or discharge)",
+           cdesc$hours_comfort_to_endpoint)
+))
+comfort_desc[, site := site_lowercase]
+
+# Small-cell suppression: mask person counts below threshold, and where the
+# contributing n is suppressed blank the distributional statistics too (an IQR
+# computed on fewer than `small_cell_threshold` encounters is itself disclosive).
+if (isTRUE(suppress_small_cells_enabled)) {
+  comfort_desc = suppress_small_cells(comfort_desc, count_cols = "n", pct_cols = "pct")
+  for (cc in c("mean", "median", "sd", "q1", "q3", "iqr"))
+    comfort_desc[suppressed == 1L, (cc) := NA_real_]
+}
+
+fwrite(comfort_desc, shareable_path(
+  paste0("comfort_status_descriptives_", site_lowercase, "_", today, ".csv")))
+message("  Comfort status descriptives:")
+for (i in seq_len(nrow(comfort_desc))) {
+  r = comfort_desc[i]
+  if (!is.na(r$pct)) {
+    message(sprintf("    %-48s n=%s (%s%%)", r$metric,
+                    format(r$n, big.mark = ","), r$pct))
+  } else {
+    message(sprintf("    %-48s n=%s mean=%s median=%s sd=%s IQR %s to %s",
+                    r$metric, format(r$n, big.mark = ","),
+                    r$mean, r$median, r$sd, r$q1, r$q3))
+  }
+}
+message("  Saved comfort_status_descriptives.")
+suppressWarnings(rm(cdesc, comfort_desc))
 
 cs_out = merge(cs_out, comfort_timing, by = "hospitalization_id", all.x = TRUE)
 cs_out = merge(cs_out, limited_timing, by = "hospitalization_id", all.x = TRUE)
@@ -805,6 +975,10 @@ cs_out_slim = cs_out[, .(hospitalization_id, flag_code_status_strict,
                          flag_code_status_lenient, first_comfort_dttm)]
 
 cip = merge(cip, cs_out_slim,  by = "hospitalization_id", all.x = TRUE)
+# merged separately from cs_out: an encounter whose ONLY comfort order predates
+# admission never appears in cs_out (which is built from final-72h orders), and
+# that is exactly the standing-order population this flag exists to capture.
+cip = merge(cip, comfort_preexist, by = "hospitalization_id", all.x = TRUE)
 cip = merge(cip, opioid_out,   by = "hospitalization_id", all.x = TRUE)
 cip = merge(cip, labs_out,     by = "hospitalization_id", all.x = TRUE)
 cip = merge(cip, wdl_out,      by = "hospitalization_id", all.x = TRUE)
@@ -814,6 +988,8 @@ cip = merge(cip, vitals_out,   by = "hospitalization_id", all.x = TRUE)
 # fill NAs with 0
 flag_cols = grep("^flag_", names(cip), value = TRUE)
 for (col in flag_cols) set(cip, which(is.na(cip[[col]])), col, 0L)
+if ("comfort_preexisting" %in% names(cip))
+  set(cip, which(is.na(cip$comfort_preexisting)), "comfort_preexisting", 0L)
 
 # protocol components (4 core)
 core_flags = c("flag_code_status_strict", "flag_opioid",
