@@ -17,7 +17,7 @@
 #   - aim1_km_curve_{site}_{date}.pdf
 #   - aim1_ttd_histogram_{site}_{date}.pdf
 #
-# Last updated bpe 16.07.2026
+# Last updated bpe 22.07.2026
 
 
 # 0. setup ---------------------------------------------------------------------
@@ -91,13 +91,14 @@ message(sprintf("Primary cohort loaded: %s encounters", format(n_cohort, big.mar
 
 # 2. derived variables ----------------------------------------------------------
 
-# age group
-cohort[, age_group := fcase(
-  age_at_admission < 40, "18-39",
-  age_at_admission < 65, "40-64",
-  age_at_admission < 80, "65-79",
-  default = "80+"
-)]
+# demographic recodes -- shared definitions from 00 so every site matches:
+#   age bands 18-64 / 65-79 / 80+; sex as Female vs not-female (Unknown grouped
+#   with not-female); race with Other+Unknown merged; and the collapsed
+#   race/ethnicity "mashup" (strategy A). Small cells are handled at save time.
+recode_age_group(cohort)
+recode_sex_female(cohort)
+recode_race_report(cohort)
+recode_nonhispanic_white(cohort)
 
 # analysis groups for Table 1
 # Compare: those who died (acute death vs hospice death) and
@@ -315,6 +316,10 @@ for (i in seq_len(nrow(ttd_summary))) {
 }
 message("====================================================================\n")
 
+if (isTRUE(suppress_small_cells_enabled))
+  ttd_summary = suppress_small_cells(
+    ttd_summary, count_cols = c("n_death", "n_live_discharge", "n_censored"),
+    pct_cols = character(0))
 fwrite(ttd_summary,  shareable_path(
   paste0("aim1_cif_summary_", site_lowercase, "_", today, ".csv")))
 fwrite(cif_data_all, shareable_path(
@@ -528,23 +533,28 @@ build_table1 = function(dt, subgroup_label) {
             q75_val    = round(quantile(g$age_at_admission, 0.75, na.rm = TRUE), 1))
 
     # --- Age group ---
-    for (ag in c("18-39", "40-64", "65-79", "80+")) {
+    for (ag in c("18-64", "65-79", "80+")) {
       add_row("Age group", ag, sum(g$age_group == ag, na.rm = TRUE))
     }
 
-    # --- Sex ---
-    for (s in unique(na.omit(g$sex_category))) {
-      add_row("Sex", s, sum(g$sex_category == s, na.rm = TRUE))
+    # --- Sex (Female vs not-female; Unknown grouped with not-female) ---
+    for (s in c("Female", "Not female")) {
+      add_row("Sex", s, sum(g$sex_female == s, na.rm = TRUE))
     }
 
-    # --- Race ---
-    for (r in unique(na.omit(g$race_category))) {
-      add_row("Race", r, sum(g$race_category == r, na.rm = TRUE))
+    # --- Race (Other and Unknown merged) ---
+    for (r in unique(na.omit(g$race_report))) {
+      add_row("Race", r, sum(g$race_report == r, na.rm = TRUE))
     }
 
     # --- Ethnicity ---
     for (e in unique(na.omit(g$ethnicity_category))) {
       add_row("Ethnicity", e, sum(g$ethnicity_category == e, na.rm = TRUE))
+    }
+
+    # --- Non-Hispanic white (binary, strategy A / "nhw01") ---
+    for (nw in c("Non-Hispanic White", "Other")) {
+      add_row("Non-Hispanic white", nw, sum(g$nhw_group == nw, na.rm = TRUE))
     }
 
     # --- LOS (continuous) ---
@@ -646,6 +656,22 @@ for (grp in c("Acute in-hospital death", "Hospice death (short-survival)",
   }
 }
 message("================================================================\n")
+
+# strategy (B): suppress small demographic cells before sharing. Group totals and
+# continuous-summary rows are preserved (their n is the group size); only non-zero
+# counts below small_cell_threshold are set to NA and flagged, so the coordinating
+# center can inject 0..(threshold-1) with denominator compensation. The console
+# summary above is printed BEFORE suppression, so the site still sees true counts.
+if (isTRUE(suppress_small_cells_enabled)) {
+  n_cells = nrow(table1_all)
+  table1_all = suppress_small_cells(table1_all, count_cols = "n", pct_cols = "pct")
+  message(sprintf("  Small-cell suppression: %s of %s rows (0 < n < %d) masked for sharing.",
+                  format(sum(table1_all$suppressed, na.rm = TRUE), big.mark = ","),
+                  format(n_cells, big.mark = ","), small_cell_threshold))
+} else {
+  table1_all[, suppressed := 0L]
+  message("  Small-cell suppression DISABLED (config suppress_small_cells = false).")
+}
 
 # save
 fwrite(
