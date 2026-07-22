@@ -24,7 +24,7 @@
 # primary cohort to avoid collider bias (see protocol §1.7).
 
 
-# Last updated bpe 16.07.2026
+# Last updated bpe 22.07.2026
 
 
 # 0. source setup --------------------------------------------------------------
@@ -832,6 +832,11 @@ for (sg in unique(subgroup_summary$subgroup)) {
   }
 }
 message("======================================\n")
+
+# small-cell suppression before cross-site compilation
+if (isTRUE(suppress_small_cells_enabled))
+  subgroup_summary = suppress_small_cells(subgroup_summary,
+                                          count_cols = "N", pct_cols = "pct")
 
 # save for cross-site compilation
 fwrite(
