@@ -1,3 +1,4 @@
+
 # 06_aim2a3_risk_adjusted_variation.R
 # Aim 2A.3: Risk-adjusted hospital-level variation in discharge disposition
 # Protocol v5.0 Section 3.6.2
@@ -24,7 +25,7 @@
 #   - aim2a3_icc_{site}.csv               — ICC per outcome category
 #   - aim2a3_hospital_ranef_{site}.csv     — hospital random intercepts (BLUPs)
 
-# Last updated bpe 16.07.2026
+# Last updated bpe 22.07.2026
 
 
 # 0. setup ---------------------------------------------------------------------
@@ -316,27 +317,14 @@ if (length(apache_fn_path) > 0) {
 }
 
 
-## 2d. Race/ethnicity collapsing -----------------------------------------------
+## 2d. Race/ethnicity and sex (shared recodes from 00) --------------------------
 
-# Collapse to 5 levels + unknown to ensure adequate cell sizes.
-cohort[, race_eth := fcase(
-  tolower(ethnicity_category) %in% c("hispanic", "hispanic or latino"),
-  "Hispanic",
-  tolower(race_category) %in% c("white", "caucasian"),
-  "White non-Hispanic",
-  tolower(race_category) %in% c("black", "african american",
-                                "black or african american"),
-  "Black non-Hispanic",
-  tolower(race_category) %in% c("asian"),
-  "Asian",
-  tolower(race_category) %in% c("other", "multiracial", "multiple",
-                                "american indian", "alaska native",
-                                "native hawaiian", "pacific islander",
-                                "american indian or alaska native",
-                                "native hawaiian or other pacific islander"),
-  "Other/Multiracial",
-  default = "Unknown"
-)]
+# race_eth: 5-level combined race/ethnicity with Other + Unknown merged.
+# sex_female: binary Female vs not-female (Unknown grouped with not-female).
+# These match the Table-1 reporting definitions so modeled and reported groups
+# are identical, and the smallest cells are collapsed for adequate cell sizes.
+recode_race_eth(cohort)
+recode_sex_female(cohort)
 
 
 ## 2e. Centered and scaled continuous covariates --------------------------------
@@ -455,7 +443,7 @@ std_transform = list(
   apache_imp_mean = if (apache2_available) mean(cohort$apache2_imputed, na.rm = TRUE) else NA_real_,
   dx_levels       = sort(unique(as.character(cohort$dx_category))),
   race_levels     = levels(factor(cohort$race_eth)),
-  sex_levels      = sort(unique(as.character(cohort$sex_category))),
+  sex_levels      = sort(unique(as.character(cohort$sex_female))),
   era_levels      = levels(factor(cohort$pandemic_period)),
   pcs_levels      = if ("preexisting_code_status" %in% names(cohort)) levels(cohort$preexisting_code_status) else NULL,
   src_levels      = if ("admission_source" %in% names(cohort)) levels(cohort$admission_source) else NULL
@@ -476,13 +464,15 @@ apply_std_transform = function(raw) {
   # coerce categoricals to the SITE's factor levels; out-of-vocab -> NA -> dropped
   d[, dx_category     := factor(as.character(dx_category),     levels = std_transform$dx_levels)]
   d[, race_eth        := factor(as.character(race_eth),        levels = std_transform$race_levels)]
-  d[, sex_category    := factor(as.character(sex_category),    levels = std_transform$sex_levels)]
+  if (!"sex_female" %in% names(d) && "sex_category" %in% names(d))
+    d[, sex_female := fifelse(tolower(trimws(sex_category)) == "female", "Female", "Not female")]
+  d[, sex_female      := factor(as.character(sex_female),      levels = std_transform$sex_levels)]
   d[, pandemic_period := factor(as.character(pandemic_period), levels = std_transform$era_levels)]
   if (!is.null(std_transform$pcs_levels) && "preexisting_code_status" %in% names(d))
     d[, preexisting_code_status := factor(as.character(preexisting_code_status), levels = std_transform$pcs_levels)]
   if (!is.null(std_transform$src_levels) && "admission_source" %in% names(d))
     d[, admission_source := factor(as.character(admission_source), levels = std_transform$src_levels)]
-  keyvars = intersect(c("dx_category", "race_eth", "sex_category", "pandemic_period",
+  keyvars = intersect(c("dx_category", "race_eth", "sex_female", "pandemic_period",
                         "preexisting_code_status", "admission_source"), names(d))
   d[complete.cases(d[, ..keyvars])]
 }
@@ -521,7 +511,7 @@ std_margins = rbindlist(list(
   data.table(covariate = "elixhauser_vw",    level = "mean", value = round(std_transform$elix_mean, 3)),
   data.table(covariate = "elixhauser_vw",    level = "sd",   value = round(sd(cohort$elixhauser_vw, na.rm = TRUE), 3)),
   if (apache2_available) data.table(covariate = "apache2", level = "mean", value = round(std_transform$apache_imp_mean, 3)),
-  .marg_cat("sex_category"), .marg_cat("race_eth"), .marg_cat("dx_category"),
+  .marg_cat("sex_female"), .marg_cat("race_eth"), .marg_cat("dx_category"),
   .marg_cat("pandemic_period"), .marg_cat("preexisting_code_status"), .marg_cat("admission_source")
 ), fill = TRUE)
 std_margins[, `:=`(site = site_lowercase, n_cohort = nrow(cohort))]
@@ -549,10 +539,13 @@ analytic_summary = cohort[, .(
   apache2_mean          = if (apache2_available) round(mean(apache2_imputed, na.rm = TRUE), 1) else NA_real_,
   apache2_sd            = if (apache2_available) round(sd(apache2_imputed,   na.rm = TRUE), 1) else NA_real_,
   pct_apache2_missing   = round(100 * mean(apache2_missing, na.rm = TRUE), 1),
-  pct_circulatory       = round(100 * mean(dx_category == "Circulatory", na.rm = TRUE), 1),
-  pct_respiratory       = round(100 * mean(dx_category == "Respiratory", na.rm = TRUE), 1),
-  pct_infectious        = round(100 * mean(dx_category == "Infectious/parasitic", na.rm = TRUE), 1),
-  pct_neoplasm          = round(100 * mean(dx_category == "Neoplasms", na.rm = TRUE), 1),
+  # dx_category now holds the ACUITY grouping (post-crosswalk), so these report
+  # the acuity categories most relevant to end-of-life case mix, not the old
+  # 22-level body-system names.
+  pct_cancer            = round(100 * mean(dx_category == "Cancer/malignancy", na.rm = TRUE), 1),
+  pct_chronic_organ_fail = round(100 * mean(dx_category == "Chronic organ failure", na.rm = TRUE), 1),
+  pct_dementia_neuro    = round(100 * mean(dx_category == "Dementia/neurodegenerative/neurodevelopmental", na.rm = TRUE), 1),
+  pct_infection_sepsis  = round(100 * mean(dx_category == "Acute infection/sepsis", na.rm = TRUE), 1),
   pct_hospice           = round(100 * mean(outcome_category %in% c(
     "same_facility_hospice_death", "same_facility_hospice_alive",
     "external_hospice_discharge"), na.rm = TRUE), 1),
@@ -565,7 +558,7 @@ analytic_summary[, site := site_lowercase]
 fwrite(
   analytic_summary,
   shareable_path(
-    paste0("aim2a3_analytic_summary_", site_lowercase, "_", today, ".csv"))
+            paste0("aim2a3_analytic_summary_", site_lowercase, "_", today, ".csv"))
 )
 message("  Saved aim2a3_analytic_summary.")
 
@@ -626,14 +619,14 @@ for (i in seq_len(nrow(var_stats[version == "all_hospitals"]))) {
 }
 
 fwrite(hosp_rates, shareable_path(
-  paste0("aim2a_hospital_rates_", site_lowercase, "_", today, ".csv")))
+       paste0("aim2a_hospital_rates_", site_lowercase, "_", today, ".csv")))
 fwrite(var_stats, shareable_path(
-  paste0("aim2a_variation_stats_", site_lowercase, "_", today, ".csv")))
+       paste0("aim2a_variation_stats_", site_lowercase, "_", today, ".csv")))
 
 # caterpillar + bivariate scatter plots
 if (nrow(hosp_rates) >= 5) {
   hosp_rates[, rank := rank(hospice_sf_rate)]
-  
+
   p_cat = ggplot(hosp_rates, aes(x = rank, y = hospice_sf_rate)) +
     geom_point(size = 2.5, color = pal_outcome[["Same-facility hospice"]]) +
     geom_hline(yintercept = median(hosp_rates$hospice_sf_rate),
@@ -642,7 +635,7 @@ if (nrow(hosp_rates) >= 5) {
          title = "Unadjusted variation: same-facility hospice (all hospitals)",
          subtitle = paste0(toupper(site_lowercase), " | ", nrow(hosp_rates), " hospitals")) +
     theme_clif()
-  
+
   # hospice-unit-only version (isolates practice from infrastructure variation)
   hu = hosp_rates[has_hospice_unit == 1L]
   if (nrow(hu) >= 3) {
@@ -658,7 +651,7 @@ if (nrow(hosp_rates) >= 5) {
   } else {
     p_cat_hu = NULL
   }
-  
+
   p_scatter = ggplot(hosp_rates, aes(x = hospice_sf_rate, y = mortality_rate)) +
     geom_point(size = 2.5, color = pal_outcome[["Same-facility hospice"]]) +
     geom_smooth(method = "lm", se = TRUE, color = pal_outcome[["In-hospital death"]], linewidth = 0.6) +
@@ -666,7 +659,7 @@ if (nrow(hosp_rates) >= 5) {
          title = "Hospital-level: hospice rate vs mortality rate",
          subtitle = toupper(site_lowercase)) +
     theme_clif()
-  
+
   p_scatter2 = ggplot(hosp_rates, aes(x = transfer_rate, y = mortality_rate)) +
     geom_point(size = 2.5, color = pal_outcome[["Routine discharge"]]) +
     geom_smooth(method = "lm", se = TRUE, color = pal_outcome[["In-hospital death"]], linewidth = 0.6) +
@@ -674,7 +667,7 @@ if (nrow(hosp_rates) >= 5) {
          title = "Hospital-level: transfer rate vs mortality rate",
          subtitle = toupper(site_lowercase)) +
     theme_clif()
-  
+
   # scatter: external vs same-facility hospice rate (§2.1)
   p_scatter3 = ggplot(hosp_rates, aes(x = hospice_sf_rate, y = hospice_ext_rate)) +
     geom_point(size = 2.5, color = pal_outcome[["External hospice"]]) +
@@ -683,12 +676,12 @@ if (nrow(hosp_rates) >= 5) {
          title = "Hospital-level: same-facility vs external hospice",
          subtitle = toupper(site_lowercase)) +
     theme_clif()
-  
+
   top_row = if (!is.null(p_cat_hu)) (p_cat | p_cat_hu) else p_cat
   p_variation = top_row / (p_scatter | p_scatter2) / p_scatter3
   ggsave(shareable_path(
-    paste0("aim2a_unadjusted_variation_", site_lowercase, "_", today, ".pdf")),
-    plot = p_variation, width = 12, height = 14, dpi = 300)
+                   paste0("aim2a_unadjusted_variation_", site_lowercase, "_", today, ".pdf")),
+         plot = p_variation, width = 12, height = 14, dpi = 300)
   message("  Saved aim2a_unadjusted_variation plots.")
   suppressWarnings(rm(p_cat, p_cat_hu, p_scatter, p_scatter2, p_scatter3, p_variation, hu))
 }
@@ -711,12 +704,12 @@ hosp_rates[, hospice_to_mort_ratio := fifelse(
 hosp_counts = cohort[, .(
   n_death_acute = sum(outcome_category == "in_hospital_death_acute"),
   n_hospice_sf  = sum(outcome_category %in% c("same_facility_hospice_death",
-                                              "same_facility_hospice_alive"))
+                                                "same_facility_hospice_alive"))
 ), by = hospital_unit]
 hosp_counts[, hospice_to_mort_count := round(n_hospice_sf / pmax(n_death_acute, 1), 3)]
 
 hosp_rates = merge(hosp_rates, hosp_counts[, .(hospital_unit, n_death_acute,
-                                               n_hospice_sf, hospice_to_mort_count)],
+                                                 n_hospice_sf, hospice_to_mort_count)],
                    by = "hospital_unit", all.x = TRUE)
 
 message(sprintf("  Hospice-to-mortality ratio: median = %.3f, IQR = %.3f–%.3f",
@@ -726,32 +719,32 @@ message(sprintf("  Hospice-to-mortality ratio: median = %.3f, IQR = %.3f–%.3f"
 
 # 30-day mortality version at death-linked sites
 is_death_linked = "death_linked_site" %in% names(cohort) &&
-  any(cohort$death_linked_site == 1L, na.rm = TRUE)
+                  any(cohort$death_linked_site == 1L, na.rm = TRUE)
 
 if (is_death_linked) {
   message("  Computing hospice-to-30-day-mortality ratio (death-linked site)...")
-  
+
   hosp_30d = cohort[, .(
     n_died_30d = sum(!is.na(days_discharge_to_death) & days_discharge_to_death <= 30 |
                        outcome_category == "in_hospital_death_acute" |
                        outcome_category == "same_facility_hospice_death"),
     n_hospice_all = sum(outcome_category %in% c("same_facility_hospice_death",
-                                                "same_facility_hospice_alive",
-                                                "external_hospice_discharge"))
+                                                  "same_facility_hospice_alive",
+                                                  "external_hospice_discharge"))
   ), by = hospital_unit]
-  
+
   hosp_30d[, hospice_to_30d_mort := round(n_hospice_all / pmax(n_died_30d, 1), 3)]
-  
+
   hosp_rates = merge(hosp_rates, hosp_30d[, .(hospital_unit, hospice_to_30d_mort)],
                      by = "hospital_unit", all.x = TRUE)
-  
+
   message(sprintf("  30-day ratio: median = %.3f (national benchmark = 0.27)",
                   median(hosp_rates$hospice_to_30d_mort, na.rm = TRUE)))
 }
 
 # save
 fwrite(hosp_rates, shareable_path(
-  paste0("aim2a_hospital_ratios_", site_lowercase, "_", today, ".csv")))
+       paste0("aim2a_hospital_ratios_", site_lowercase, "_", today, ".csv")))
 message("  Saved aim2a_hospital_ratios.")
 
 rm(hosp_rates, hosp_counts, var_stats)
@@ -802,13 +795,13 @@ if (!"pathway_class" %in% names(cohort)) {
 # column is missing (e.g. APACHE absent at a site). That was the 0-row bug.
 model_base = cohort[
   !is.na(age_centered) &
-    !is.na(sex_category) &
+    !is.na(sex_female) &
     !is.na(race_eth) &
     !is.na(dx_category)
 ]
 
 # ensure factor levels
-model_base[, sex_category := factor(sex_category)]
+model_base[, sex_female := factor(sex_female)]
 model_base[, race_eth := relevel(factor(race_eth), ref = "White non-Hispanic")]
 # diagnosis-category reference = most frequent body system present in the model
 # data. Robust to the CCSR scheme (and any future regrouping) — avoids hardcoding
@@ -871,7 +864,7 @@ extra_base = c(
 )
 
 base_rhs = paste(
-  c("age_centered", "sex_category", "race_eth", "dx_category",
+  c("age_centered", "sex_female", "race_eth", "dx_category",
     "elix_centered",
     if (apache2_available) c("apache2_centered", "apache2_missing"),
     extra_base,
@@ -970,24 +963,24 @@ formula_glmm_course  = as.formula(paste("y ~", course_rhs, "+", re_rhs))
 # probability; no nested simulation over patients is needed. Ranks depend only on
 # u, so rank uncertainty is simulated on the hospital effects alone.
 compute_sigma_ci = TRUE   # profile-likelihood CI for sigma^2. This is the slow
-# step; set FALSE at very large sites if runtime bites.
+                          # step; set FALSE at very large sites if runtime bites.
 
 hospital_variation_profile = function(fit, model_dt, outcome_label, subgroup_label,
                                       n_outcome, n_hospitals,
                                       B = 2000, std_n = 10000) {
-  
+
   vc     = as.data.table(VarCorr(fit))
   sigma2 = vc[grp == "hospital_unit", vcov][1]
-  
+
   # a singular / zero-variance fit has no between-hospital variation to profile
   if (!is.finite(sigma2) || sigma2 <= 1e-8) {
     message("      Between-hospital variance is ~0 (singular fit); skipping profiling.")
     return(NULL)
   }
   sigma = sqrt(sigma2)
-  
+
   set.seed(20260713)   # reproducible standardization sample and rank draws
-  
+
   # between-hospital variance, with a profile-likelihood interval (SD scale)
   sig_ci = c(NA_real_, NA_real_)
   if (isTRUE(compute_sigma_ci)) {
@@ -1000,33 +993,33 @@ hospital_variation_profile = function(fit, model_dt, outcome_label, subgroup_lab
       c(NA_real_, NA_real_)
     })
   }
-  
+
   # median odds ratio (Larsen & Merlo)
   mor = exp(sqrt(2 * sigma2) * qnorm(0.75))
-  
+
   # empirical-Bayes hospital effects and posterior SDs
   re   = ranef(fit, condVar = TRUE)$hospital_unit
   u    = re[, 1]
   pv   = as.numeric(attr(re, "postVar")[1, 1, ])
   sd_u = sqrt(pv)
-  
+
   # reliability: share of a hospital's apparent variation that is signal.
   # For the normal-normal model, postVar = sigma2 * (1 - reliability).
   reliability = pmin(pmax(1 - pv / sigma2, 0), 1)
-  
+
   # standardized patient population: linear predictor with the hospital effect
   # removed, so every hospital is evaluated on the SAME case mix
   # standardize on the NETWORK standard population if one was distributed
   # (comparable across sites); otherwise fall back to a site-local sample.
   std_dt = if (exists("std_frame") && !is.null(std_frame)) std_frame
-  else if (nrow(model_dt) > std_n) model_dt[sample(.N, std_n)] else model_dt
+           else if (nrow(model_dt) > std_n) model_dt[sample(.N, std_n)] else model_dt
   xb     = predict(fit, newdata = std_dt, re.form = NA, type = "link")
   rsp    = function(uu) mean(plogis(xb + uu))
-  
+
   rs_prob = vapply(u,               rsp, numeric(1))
   rs_lo   = vapply(u - 1.96 * sd_u, rsp, numeric(1))
   rs_hi   = vapply(u + 1.96 * sd_u, rsp, numeric(1))
-  
+
   # rank uncertainty: draw from each hospital's posterior, rank within each draw
   draws    = vapply(seq_along(u), function(j) rnorm(B, u[j], sd_u[j]), numeric(B))
   if (is.null(dim(draws))) draws = matrix(draws, nrow = B)
@@ -1034,7 +1027,7 @@ hospital_variation_profile = function(fit, model_dt, outcome_label, subgroup_lab
   rank_med = apply(rk, 2, median)
   rank_lo  = apply(rk, 2, quantile, probs = 0.025, names = FALSE)
   rank_hi  = apply(rk, 2, quantile, probs = 0.975, names = FALSE)
-  
+
   hosp_tbl = data.table(
     hospital_unit   = rownames(re),
     outcome         = outcome_label,
@@ -1054,11 +1047,11 @@ hospital_variation_profile = function(fit, model_dt, outcome_label, subgroup_lab
     rank_upper      = round(rank_hi, 1),
     n_outcome       = n_outcome
   )
-  
+
   # 10th vs 90th percentile of the hospital random-effect distribution
   p10 = rsp(qnorm(0.10, 0, sigma))
   p90 = rsp(qnorm(0.90, 0, sigma))
-  
+
   summ = data.table(
     outcome               = outcome_label,
     subgroup              = subgroup_label,
@@ -1078,10 +1071,10 @@ hospital_variation_profile = function(fit, model_dt, outcome_label, subgroup_lab
     n_hospitals           = n_hospitals,
     n_standardization     = nrow(std_dt)
   )
-  
+
   message(sprintf("      MOR = %.2f | sigma2 = %.4f | RS prob p10->p90: %.4f -> %.4f (diff %.4f) | median reliability = %.2f",
                   mor, sigma2, p10, p90, p90 - p10, median(reliability)))
-  
+
   list(summary = summ, hospitals = hosp_tbl)
 }
 
@@ -1104,7 +1097,7 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
     ref_dt     = ref_group[pathway_class == "a_available_captured"]
     restricted = TRUE
   }
-  
+
   # any_hospice_disposition is a derived flag spanning same-facility AND external
   # hospice, not a level of outcome_category
   outcome_group = if (outcome_label == "any_hospice_disposition") {
@@ -1256,7 +1249,7 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
         subgroup   = subgroup_label,
         site       = site_lowercase
       )
-      
+
       # protocol 2A.3 profiling suite (supersedes ICC as the headline summary)
       prof = tryCatch(
         hospital_variation_profile(fit, model_dt, outcome_label, subgroup_label,
@@ -1265,7 +1258,7 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
           message(sprintf("      Hospital profiling failed: %s", e$message))
           NULL
         })
-      
+
       return(list(coefficients = coefs, icc = icc_row, ranef = ranef_dt,
                   var_summary  = if (!is.null(prof)) prof$summary,
                   hosp_profile = if (!is.null(prof)) prof$hospitals))
@@ -1402,12 +1395,12 @@ rm(model_base_full, ref_group_full)
 # subgroup = "one_admission_per_patient" in the standard coefficient tables.
 
 if ("patient_id" %in% names(model_base)) {
-  
+
   model_base_full  = copy(model_base)
   ref_group_full   = ref_group
   n_ref_full       = n_ref
   n_hospitals_full = n_hospitals
-  
+
   if ("admission_dttm" %in% names(model_base)) {
     setorder(model_base, patient_id, admission_dttm)
   } else {
@@ -1417,11 +1410,11 @@ if ("patient_id" %in% names(model_base)) {
   ref_group   = model_base[outcome_category == "routine_discharge"]
   n_ref       = nrow(ref_group)
   n_hospitals = uniqueN(model_base$hospital_unit)
-  
+
   message(sprintf("\n  === One-admission-per-patient sensitivity (%s of %s encounters) ===",
                   format(nrow(model_base), big.mark = ","),
                   format(nrow(model_base_full), big.mark = ",")))
-  
+
   if (n_ref >= 20 && nrow(model_base) >= 100) {
     oneadm_results = lapply(outcomes_to_model, \(out) {
       fit_binary_glmm(out, "one_admission_per_patient",
@@ -1433,14 +1426,14 @@ if ("patient_id" %in% names(model_base)) {
     message("  Too small for modeling -- skipping.")
     oneadm_results = list()
   }
-  
+
   # restore the full analytic sample
   model_base  = model_base_full
   ref_group   = ref_group_full
   n_ref       = n_ref_full
   n_hospitals = n_hospitals_full
   rm(model_base_full, ref_group_full)
-  
+
 } else {
   oneadm_results = list()
 }
@@ -1471,19 +1464,19 @@ hosp_char_path = file.path(project_root, "reference_files", "hospital_characteri
 
 if (file.exists(hosp_char_path)) {
   message("\n  Loading hospital characteristics...")
-  
+
   hosp_char = fread(hosp_char_path, colClasses = c(medicare_id = "character"))
   hosp_char[, medicare_id := stringr::str_pad(medicare_id, 6, "left", "0")]
-  
+
   # merge onto analytic summary (already saved above, reload for enrichment)
   hosp_char_cols = intersect(names(hosp_char), c("medicare_id", "bed_size",
-                                                 "teaching_status", "icu_beds", "has_hospice_unit"))
+                             "teaching_status", "icu_beds", "has_hospice_unit"))
   hosp_char_slim = hosp_char[, ..hosp_char_cols]
-  
+
   # save enriched hospital file for cross-site compilation
   fwrite(hosp_char_slim,
          shareable_path(
-           paste0("aim2a_hospital_characteristics_", site_lowercase, "_", today, ".csv")))
+                   paste0("aim2a_hospital_characteristics_", site_lowercase, "_", today, ".csv")))
   message(sprintf("  Hospital characteristics loaded for %d hospitals.", nrow(hosp_char_slim)))
   rm(hosp_char, hosp_char_slim)
 } else {
@@ -1507,16 +1500,16 @@ mn_ok = requireNamespace("mclogit", quietly = TRUE)
 
 if (mn_ok) {
   library(mclogit)
-  
+
   mn_dt = model_base[outcome_category %in% c("routine_discharge", outcomes_to_model)]
   mn_dt[, outcome_mn := relevel(factor(outcome_category), ref = "routine_discharge")]
-  
+
   message(sprintf("  Multinomial: %s encounters, %d hospitals, %d outcome levels.",
                   format(nrow(mn_dt), big.mark = ","),
                   uniqueN(mn_dt$hospital_unit), nlevels(mn_dt$outcome_mn)))
-  
+
   mn_formula = as.formula(paste("outcome_mn ~", base_rhs))
-  
+
   # Random structure mirrors the binary GLMMs (system term where a site spans
   # multiple systems; patient term is NOT added -- mblogit cannot carry hundreds
   # of thousands of patient levels, and within-patient dependence is handled by
@@ -1527,13 +1520,13 @@ if (mn_ok) {
   message(sprintf("  Multinomial random effects: %s",
                   paste(vapply(if (is.list(mn_random)) mn_random else list(mn_random),
                                \(f) deparse(f[[2]]), character(1)), collapse = " + ")))
-  
+
   mn_fit = tryCatch(
     mblogit(mn_formula, data = mn_dt, random = mn_random,
             control = mmclogit.control(maxit = 100)),
     error = function(e) { message("  Multinomial failed: ", e$message); NULL }
   )
-  
+
   if (!is.null(mn_fit)) {
     mn_coefs = as.data.table(summary(mn_fit)$coefficients, keep.rownames = "term")
     setnames(mn_coefs, 1:5, c("term", "estimate", "se", "z_value", "p_value"))
@@ -1543,7 +1536,7 @@ if (mn_ok) {
       ci_upper = round(exp(estimate + 1.96 * se), 3),
       model_type = "multinomial_mblogit", site = site_lowercase
     )]
-    
+
     mn_vc = tryCatch(VarCov(mn_fit), error = function(e) NULL)
     if (!is.null(mn_vc)) {
       mn_icc = rbindlist(lapply(seq_along(diag(mn_vc[[1]])), \(i) {
@@ -1556,11 +1549,11 @@ if (mn_ok) {
       fwrite(mn_icc, shareable_path(
         paste0("aim2_multinomial_icc_", site_lowercase, "_", today, ".csv")))
     }
-    
+
     fwrite(mn_coefs, shareable_path(
       paste0("aim2_multinomial_coefficients_", site_lowercase, "_", today, ".csv")))
     message("  Saved multinomial model results.")
-    
+
     # -- Risk-standardized disposition composition (protocol 2A.3, Option C) -----
     # For each hospital, predict the full disposition distribution for a COMMON
     # standardized patient population (the same rows for every hospital), then
@@ -1573,10 +1566,10 @@ if (mn_ok) {
       std_n  = 10000L
       set.seed(20260713)
       std_dt = if (exists("std_frame") && !is.null(std_frame)) copy(std_frame)
-      else if (nrow(mn_dt) > std_n) mn_dt[sample(.N, std_n)] else copy(mn_dt)
+               else if (nrow(mn_dt) > std_n) mn_dt[sample(.N, std_n)] else copy(mn_dt)
       hosp_ids = mn_dt[, sort(unique(hospital_unit))]
       lvls = levels(mn_dt$outcome_mn)
-      
+
       comp = rbindlist(lapply(hosp_ids, \(h) {
         nd = copy(std_dt); nd[, hospital_unit := h]
         # mblogit predict returns an N x (#categories) matrix of probabilities
@@ -1591,7 +1584,7 @@ if (mn_ok) {
                   n_standardization = nrow(std_dt))]
       comp
     }, error = \(e) { message("  Multinomial standardization failed: ", e$message); NULL })
-    
+
     if (!is.null(mn_composition)) {
       # QC: every hospital's standardized composition must sum to ~1
       sums = mn_composition[, .(tot = sum(rs_probability)), by = hospital_unit]
@@ -1606,14 +1599,14 @@ if (mn_ok) {
         paste0("aim2a3_rs_composition_", site_lowercase, "_", today, ".csv")))
       message("  Saved aim2a3_rs_composition (risk-standardized disposition composition).")
     }
-    
+
     # -- Option C consistency checks (protocol 2A.3 design) ---------------------
     # The multinomial and the binary GLMMs estimate the SAME contrasts (both use
     # routine_discharge as reference), so they should agree. These run only where
     # the binary GLMMs also fitted, i.e. multi-hospital sites; at a single- or
     # two-hospital site neither model fits and the block is silently skipped.
     if (exists("all_var_summary") && nrow(all_var_summary) > 0 && !is.null(mn_vc)) {
-      
+
       # Check 1: sigma^2 ordering. mblogit is PQL (biased downward); lme4 is
       # Laplace. So for each disposition the multinomial sigma^2 should be <= the
       # binary sigma^2. A multinomial value LARGER than the binary one contradicts
@@ -1630,7 +1623,7 @@ if (mn_ok) {
                           if (chk$sigma2_ordering_ok[i]) "OK"
                           else "** multinomial > binary: check convergence **"))
       }
-      
+
       # Check 2: hospital random effects should correlate across the two models
       # for each disposition. Best-effort -- mblogit's random-effect storage is
       # version-dependent, so a failure here degrades to a message, not an error.
@@ -1658,13 +1651,13 @@ if (mn_ok) {
           message("    [consistency] ranef correlation skipped (unexpected mblogit RE shape).")
         }
       }, error = \(e) message("    [consistency] ranef correlation unavailable: ", conditionMessage(e)))
-      
+
       chk[, `:=`(site = site_lowercase, model_spec = "primary")]
       fwrite(chk, shareable_path(
         paste0("aim2a3_model_consistency_", site_lowercase, "_", today, ".csv")))
       message("  Saved aim2a3_model_consistency (multinomial vs binary GLMM agreement).")
     }
-    
+
     rm(mn_dt, mn_fit, mn_coefs)
     suppressWarnings(rm(mn_vc, mn_icc, mn_composition))
   }
@@ -1706,10 +1699,10 @@ icc_over_time = rbindlist(lapply(era_levels, \(era) {
       s2 = as.data.table(VarCorr(fit))[grp == "hospital_unit", vcov]
       re = ranef(fit)$hospital_unit
       list(summary = data.table(pandemic_period = era, outcome = out,
-                                sigma2_hospital = round(s2, 4), icc = round(s2/(s2 + pi^2/3), 4),
-                                n_hospitals = uniqueN(md$hospital_unit), site = site_lowercase),
+                  sigma2_hospital = round(s2, 4), icc = round(s2/(s2 + pi^2/3), 4),
+                  n_hospitals = uniqueN(md$hospital_unit), site = site_lowercase),
            ranef = data.table(hospital_unit = rownames(re),
-                              ranef_intercept = re[,1], era = era, outcome = out))
+                  ranef_intercept = re[,1], era = era, outcome = out))
     }, error = function(e) NULL)
   }), fill = TRUE)
 }), fill = TRUE)
@@ -1718,7 +1711,7 @@ icc_over_time = rbindlist(lapply(era_levels, \(era) {
 if (length(icc_over_time) > 0 && nrow(icc_over_time) > 0) {
   icc_summary = rbindlist(lapply(icc_over_time$summary, identity), fill = TRUE)
   icc_ranef   = rbindlist(lapply(icc_over_time$ranef, identity), fill = TRUE)
-  
+
   if (!is.null(icc_summary) && nrow(icc_summary) > 0) {
     message("  ICC by era:")
     for (i in seq_len(nrow(icc_summary)))
@@ -1728,7 +1721,7 @@ if (length(icc_over_time) > 0 && nrow(icc_over_time) > 0) {
     fwrite(icc_summary, shareable_path(
       paste0("aim2_icc_over_time_", site_lowercase, "_", today, ".csv")))
   }
-  
+
   # Spearman correlation of hospital random intercepts across eras
   if (!is.null(icc_ranef) && nrow(icc_ranef) > 0) {
     spear_rows = rbindlist(lapply(era_outcomes, \(out) {
@@ -1835,7 +1828,7 @@ if (nrow(all_icc))   all_icc[,   model_spec := "primary"]
 fwrite(
   all_coefs,
   shareable_path(
-    paste0("aim2a3_model_coefficients_", site_lowercase, "_", today, ".csv"))
+            paste0("aim2a3_model_coefficients_", site_lowercase, "_", today, ".csv"))
 )
 message("  Saved aim2a3_model_coefficients.")
 
@@ -1857,7 +1850,7 @@ if (nrow(course_icc)) {
 fwrite(
   all_icc,
   shareable_path(
-    paste0("aim2a3_icc_", site_lowercase, "_", today, ".csv"))
+            paste0("aim2a3_icc_", site_lowercase, "_", today, ".csv"))
 )
 message("  Saved aim2a3_icc.")
 
@@ -1878,6 +1871,9 @@ if (nrow(all_var_summary) > 0) {
 
 if (nrow(all_hosp_profile) > 0) {
   all_hosp_profile[, model_spec := "primary"]
+  if (isTRUE(suppress_small_cells_enabled))
+    all_hosp_profile = suppress_small_cells(all_hosp_profile,
+                                            count_cols = "n_outcome", pct_cols = character(0))
   fwrite(all_hosp_profile, shareable_path(
     paste0("aim2a3_hospital_profile_", site_lowercase, "_", today, ".csv")))
   message("  Saved aim2a3_hospital_profile (risk-standardized probs, reliability, rank CIs).")
@@ -1887,7 +1883,7 @@ if (nrow(all_ranef) > 0) {
   fwrite(
     all_ranef,
     shareable_path(
-      paste0("aim2a3_hospital_ranef_", site_lowercase, "_", today, ".csv"))
+              paste0("aim2a3_hospital_ranef_", site_lowercase, "_", today, ".csv"))
   )
   message("  Saved aim2a3_hospital_ranef.")
 }
