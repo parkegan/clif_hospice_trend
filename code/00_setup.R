@@ -1,9 +1,7 @@
-
-
 # 00_setup.R
 # This script loads packages, detects system resources, reads config,
 # loads and validates CLIF tables, and defines shared utility functions.
-# Last updated bpe 16.07.2026
+# Last updated bpe 22.07.2026
 
 
 # install and load packages ----------------------------------------------------
@@ -175,6 +173,123 @@ load_ccsr_acuity_crosswalk = function() {
   }
   cw
 }
+
+# ---- shared demographic recodes & small-cell handling (federation) -----------
+# Demographics MUST be categorized identically at every site for cross-site
+# compilation, so the recodes live here and are called from the reporting scripts.
+# Two small-cell strategies from the analysis discussion are BOTH provided, to be
+# assessed once we see how many sites hit sparse cells:
+#   (A) a collapsed race/ethnicity "mashup" (fewer, larger cells), and
+#   (B) suppression of counts below a threshold (for coordinating-center noise
+#       injection with denominator compensation).
+
+# Small-cell disclosure control. These are deliberately HARD-CODED constants and
+# are NOT read from config.yaml. Disclosure protection has to be identical at
+# every site for the compiled tables to be comparable, and config.yaml is
+# site-specific and deliberately not version controlled, so a site could weaken
+# the threshold or switch suppression off entirely with no record of the change.
+# Adjusting these requires a code edit, which is reviewed and tracked in git for
+# the whole consortium. A site whose local IRB requires a HIGHER threshold should
+# raise the value here rather than add a config key.
+small_cell_threshold         = 5L
+suppress_small_cells_enabled = TRUE
+
+# Age bands. The former 18-39 group was too sparse in the hospice cells, so the
+# non-elderly are one 18-64 band; 65-79 and 80+ carry the end-of-life signal.
+recode_age_group = function(dt) {
+  dt[, age_group := fcase(
+    age_at_admission < 65L, "18-64",
+    age_at_admission < 80L, "65-79",
+    default = "80+")]
+  dt
+}
+
+# Sex as a binary: Female vs not-female. Unknown and missing are grouped with the
+# non-female side because Unknown is itself a very small cell.
+recode_sex_female = function(dt) {
+  dt[, sex_female := fifelse(tolower(trimws(sex_category)) == "female",
+                             "Female", "Not female")]
+  dt
+}
+
+# Race for the granular Table-1 block, with the small Unknown and Other cells
+# merged into one "Other/Unknown" level.
+recode_race_report = function(dt) {
+  dt[, race_report := fifelse(
+    tolower(trimws(race_category)) %in% c("unknown", "other", "") |
+      is.na(race_category),
+    "Other/Unknown", as.character(race_category))]
+  dt
+}
+
+# Combined race/ethnicity (the MODEL covariate in 04, and reported in Table 1):
+# one variable merging race and ethnicity, with the smallest cells (Other +
+# Unknown) collapsed together.
+recode_race_eth = function(dt) {
+  dt[, race_eth := fcase(
+    tolower(ethnicity_category) %in% c("hispanic", "hispanic or latino"), "Hispanic",
+    tolower(race_category) %in% c("white", "caucasian"), "White non-Hispanic",
+    tolower(race_category) %in% c("black", "african american",
+                                  "black or african american"), "Black non-Hispanic",
+    tolower(race_category) %in% c("asian"), "Asian",
+    default = "Other/Unknown")]
+  dt
+}
+
+# (A) Binary non-Hispanic-white indicator ("nhw01"): the maximally collapsed
+# race/ethnicity option, for assessing whether the finer scheme is even needed.
+# 1 = non-Hispanic white; 0 = everyone else (Hispanic of any race, or non-white).
+# Emitted both as a 0/1 integer (nhw01) and a labeled factor (nhw_group) for
+# readable Table-1 rows.
+recode_nonhispanic_white = function(dt) {
+  dt[, nhw01 := as.integer(
+    tolower(race_category) %in% c("white", "caucasian") &
+      !tolower(ethnicity_category) %in% c("hispanic", "hispanic or latino"))]
+  dt[, nhw_group := fifelse(nhw01 == 1L, "Non-Hispanic White", "Other")]
+  dt
+}
+
+# (B) small-cell suppression for shareable COUNT tables. A non-zero count below
+# the threshold is set to NA and flagged in a `suppressed` column; group totals
+# and denominators are left intact so the coordinating center can inject
+# 0..(threshold-1) with denominator compensation. True zeros are NOT suppressed
+# (a zero is not disclosive). Continuous-summary rows (whose n is the group total,
+# far above the threshold) are untouched.
+suppress_small_cells = function(dt, count_cols = "n", pct_cols = "pct",
+                                threshold = small_cell_threshold) {
+  out = data.table::copy(as.data.table(dt))
+  # guard: a caller may RAISE the threshold but never lower it below the study
+  # minimum, so no call site can weaken disclosure control locally
+  threshold = max(as.integer(threshold), small_cell_threshold, na.rm = TRUE)
+  count_cols = intersect(count_cols, names(out))
+  if (!length(count_cols)) return(out)
+  is_small = function(cc) !is.na(out[[cc]]) & out[[cc]] > 0 & out[[cc]] < threshold
+  # evaluate every column BEFORE any masking, so the flags are not affected by the
+  # type conversion performed in the loop below
+  small_list = lapply(count_cols, is_small)
+  # row-level flag: any count cell in the row is a small non-zero cell
+  out[, suppressed := as.integer(Reduce(`|`, small_list))]
+  # Mask each small count cell with a "<threshold" LABEL rather than a blank, so a
+  # reader can tell the value was computed and is simply small, not missing or
+  # failed. This converts the count column to character; that is intentional, and
+  # happens immediately before the table is written, so no downstream arithmetic
+  # is affected. True zeros and counts at or above the threshold keep their value.
+  lab = paste0("<", threshold)
+  for (i in seq_along(count_cols)) {
+    cc  = count_cols[[i]]
+    val = out[[cc]]
+    chr = rep(NA_character_, length(val))
+    keep = !is.na(val)
+    chr[keep] = format(val[keep], scientific = FALSE, trim = TRUE)
+    chr[small_list[[i]]] = lab
+    data.table::set(out, j = cc, value = chr)
+  }
+  # A percent derived from a suppressed count is itself disclosive (it can be
+  # inverted with the denominator), so blank it rather than labelling it.
+  for (pc in intersect(pct_cols, names(out))) out[suppressed == 1L, (pc) := NA_real_]
+  out
+}
+
 
 standard_pop_path = config$network_standard_population_file %||%
   file.path(project_root, "config", "network_standard_population.csv")
@@ -517,6 +632,27 @@ data_list = switch(file_type,
 names(data_list) = names(required_filenames)
 
 
+# normalize identifier key types -----------------------------------------------
+# Parquet id columns may be utf8 at one site and large_utf8 at another; arrow
+# refuses to join keys whose string types differ (e.g. adt hospitalization_id as
+# large_string vs a utf8 lookup table). Cast every id key to plain utf8 at load
+# so downstream joins are type-consistent regardless of how a site wrote its
+# parquet, and so collected id columns land as character for data.table merges.
+
+cast_id_keys = function(tbl) {
+  nm = names(tbl)
+  if ("hospitalization_id" %in% nm)
+    tbl = dplyr::mutate(tbl, hospitalization_id = cast(hospitalization_id, arrow::string()))
+  if ("patient_id" %in% nm)
+    tbl = dplyr::mutate(tbl, patient_id = cast(patient_id, arrow::string()))
+  if ("hospital_id" %in% nm)
+    tbl = dplyr::mutate(tbl, hospital_id = cast(hospital_id, arrow::string()))
+  tbl
+}
+
+data_list = lapply(data_list, cast_id_keys)
+
+
 # validate table contents ------------------------------------------------------
 
 validate_table = function(tbl, table_name, req_vars = NULL, req_values = list()) {
@@ -705,16 +841,16 @@ validate_all_tables(data_list, validation_specs)
 has_patient_assessments = "patient_assessments" %in% clif_table_basenames
 
 if (has_patient_assessments) {
-
+  
   pa_file = table_file_map[["patient_assessments"]]
-
-  data_list[["patient_assessments"]] = switch(
+  
+  data_list[["patient_assessments"]] = cast_id_keys(switch(
     file_type,
     parquet = arrow::open_dataset(pa_file),
     csv     = arrow::read_csv_arrow(pa_file),
     fst     = arrow::arrow_table(fst::read_fst(pa_file, as.data.table = TRUE))
-  )
-
+  ))
+  
   pa_validation = validate_table(
     tbl        = data_list[["patient_assessments"]],
     table_name = "patient_assessments",
@@ -722,7 +858,7 @@ if (has_patient_assessments) {
                    "assessment_category", "numerical_value"),
     req_values = list(assessment_category = "gcs_total")
   )
-
+  
   if (!is.null(pa_validation)) {
     warning("patient_assessments present but failed validation:\n",
             pa_validation,
@@ -732,7 +868,7 @@ if (has_patient_assessments) {
   } else {
     message("Optional table patient_assessments loaded and validated.")
   }
-
+  
 } else {
   message("Optional table patient_assessments not found; APACHE II will default GCS to 15.")
 }
@@ -745,12 +881,12 @@ if (has_crrt) {
   
   crrt_file = table_file_map[["crrt_therapy"]]
   
-  data_list[["crrt_therapy"]] = switch(
+  data_list[["crrt_therapy"]] = cast_id_keys(switch(
     file_type,
     parquet = arrow::open_dataset(crrt_file),
     csv     = arrow::read_csv_arrow(crrt_file),
     fst     = arrow::arrow_table(fst::read_fst(crrt_file, as.data.table = TRUE))
-  )
+  ))
   
   # validate crrt_therapy
   crrt_validation = validate_table(
@@ -778,8 +914,8 @@ if (has_crrt) {
 rm(validation_specs, req_labs, req_vitals,
    clif_table_basenames, clif_table_filenames,
    required_filenames, required_tables,
-   table_file_map, validate_table, validate_all_tables)
+   table_file_map, validate_table, validate_all_tables,
+   cast_id_keys)
 gc()
 
 message("00_setup.R complete.")
-
