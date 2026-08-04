@@ -1,32 +1,64 @@
-
 # 04_aim2a3_risk_adjusted_variation.R
-# Aim 2A.3: Risk-adjusted hospital-level variation in discharge disposition
-# Protocol v5.0 Section 3.6.2
+# Aim 2A: Hospital-level variation in discharge disposition
+# Protocol v7.0, Sections 3.4.4 and 2A.1-2A.3
 
-# Approach:
+# Scope: this script covers all of Aim 2A.
+#   2A.1  Unadjusted between-hospital variation in disposition rates
+#   2A.2  Hospice-to-mortality ratios, including the 30-day death-linked ratio
+#   2A.3  Risk-adjusted variation, the substantive analysis
+
+# Approach (2A.3):
 #   The protocol specifies a mixed-effects multinomial logistic regression with
 #   hospital random intercepts. We implement this as a set of separate binary
-#   GLMMs using lme4::glmer().
+#   GLMMs (lme4::glmer), each outcome vs. routine_discharge, and fit the
+#   multinomial (mclogit) alongside as a consistency check. See
+#   aim2a3_model_consistency for the agreement diagnostics.
 
-# Covariates (protocol 3.6.2):
-#     - Hospital (random)
+# Covariates, primary model (protocol 3.4.4):
 #     - Age (continuous, centered)
 #     - Sex
 #     - Race/ethnicity (collapsed to 5-level)
-#     - Admission diagnosis category (ICD-10 based)
+#     - Admission diagnosis category (ICD-10 -> CCSR)
 #     - Comorbidity burden (Elixhauser van Walraven index)
-#     - Admission severity (APACHE II score, first 48h)
-#     - ICU utilization (binary)
+#     - Admission severity (APACHE II, first 24h; plus a missingness indicator)
+#     - Preexisting code status
+#     - Admission source
+#     - Pandemic period
 
+# Random effects:
+#     - (1 | hospital_unit)  
+#     - (1 | health_system)  
+#     - (1 | patient_id)     
 
-# Outputs (shareable CSVs in final_output/ for cross-site compilation):
-#   - aim2a3_analytic_summary_{site}.csv   — covariate distributions by hospital
-#   - aim2a3_model_coefficients_{site}.csv — fixed effects from each binary GLMM
-#   - aim2a3_icc_{site}.csv               — ICC per outcome category
-#   - aim2a3_hospital_ranef_{site}.csv     — hospital random intercepts (BLUPs)
+# Variation reporting: the protocol replaced the ICC with a profiling suite.
+# The headline quantities are sigma^2 with an interval, the median odds ratio,
+# risk-standardized hospital probabilities, reliability, and rank uncertainty.
+# The ICC is retained as a secondary column only.
 
-# Last updated bpe 22.07.2026
+# Outputs:
+#   2A.1 / 2A.2
+#     - aim2a_hospital_characteristics_{site}.csv
+#     - aim2a_hospital_rates_{site}.csv
+#     - aim2a_hospital_ratios_{site}.csv
+#     - aim2a_variation_stats_{site}.csv
+#     - aim2a_unadjusted_variation_{site}.png 
+#   2A.3 primary
+#     - aim2a3_analytic_summary_{site}.csv           — covariate distributions
+#     - aim2a3_standardization_margins_{site}.csv    — for pooled-standard assembly
+#     - aim2a3_model_coefficients_{site}.csv         — fixed effects, binary GLMMs
+#     - aim2a3_variation_summary_{site}.csv          — sigma^2, MOR, p10-p90, reliability
+#     - aim2a3_hospital_profile_{site}.csv           — RS probs, reliability, rank CIs
+#     - aim2a3_hospital_ranef_{site}.csv             — hospital random intercepts (BLUPs)
+#     - aim2a3_icc_{site}.csv                        — secondary
+#     - aim2a3_rs_composition_{site}.csv             — multinomial composition
+#     - aim2a3_model_consistency_{site}.csv          — binary vs. multinomial agreement
+#   2A.3 secondary (clinical course, separate estimand)
+#     - aim2a3_model_coefficients_clinical_course_{site}.csv
+#     - aim2a3_icc_clinical_course_{site}.csv
+#   Temporary
+#     - aim2a3_sigma_ci_validation_{site}.csv
 
+# Last updated bpe 26.08.04
 
 # 0. setup ---------------------------------------------------------------------
 
@@ -558,7 +590,7 @@ analytic_summary[, site := site_lowercase]
 fwrite(
   analytic_summary,
   shareable_path(
-            paste0("aim2a3_analytic_summary_", site_lowercase, "_", today, ".csv"))
+    paste0("aim2a3_analytic_summary_", site_lowercase, "_", today, ".csv"))
 )
 message("  Saved aim2a3_analytic_summary.")
 
@@ -619,14 +651,14 @@ for (i in seq_len(nrow(var_stats[version == "all_hospitals"]))) {
 }
 
 fwrite(hosp_rates, shareable_path(
-       paste0("aim2a_hospital_rates_", site_lowercase, "_", today, ".csv")))
+  paste0("aim2a_hospital_rates_", site_lowercase, "_", today, ".csv")))
 fwrite(var_stats, shareable_path(
-       paste0("aim2a_variation_stats_", site_lowercase, "_", today, ".csv")))
+  paste0("aim2a_variation_stats_", site_lowercase, "_", today, ".csv")))
 
 # caterpillar + bivariate scatter plots
 if (nrow(hosp_rates) >= 5) {
   hosp_rates[, rank := rank(hospice_sf_rate)]
-
+  
   p_cat = ggplot(hosp_rates, aes(x = rank, y = hospice_sf_rate)) +
     geom_point(size = 2.5, color = pal_outcome[["Same-facility hospice"]]) +
     geom_hline(yintercept = median(hosp_rates$hospice_sf_rate),
@@ -635,7 +667,7 @@ if (nrow(hosp_rates) >= 5) {
          title = "Unadjusted variation: same-facility hospice (all hospitals)",
          subtitle = paste0(toupper(site_lowercase), " | ", nrow(hosp_rates), " hospitals")) +
     theme_clif()
-
+  
   # hospice-unit-only version (isolates practice from infrastructure variation)
   hu = hosp_rates[has_hospice_unit == 1L]
   if (nrow(hu) >= 3) {
@@ -651,7 +683,7 @@ if (nrow(hosp_rates) >= 5) {
   } else {
     p_cat_hu = NULL
   }
-
+  
   p_scatter = ggplot(hosp_rates, aes(x = hospice_sf_rate, y = mortality_rate)) +
     geom_point(size = 2.5, color = pal_outcome[["Same-facility hospice"]]) +
     geom_smooth(method = "lm", se = TRUE, color = pal_outcome[["In-hospital death"]], linewidth = 0.6) +
@@ -659,7 +691,7 @@ if (nrow(hosp_rates) >= 5) {
          title = "Hospital-level: hospice rate vs mortality rate",
          subtitle = toupper(site_lowercase)) +
     theme_clif()
-
+  
   p_scatter2 = ggplot(hosp_rates, aes(x = transfer_rate, y = mortality_rate)) +
     geom_point(size = 2.5, color = pal_outcome[["Routine discharge"]]) +
     geom_smooth(method = "lm", se = TRUE, color = pal_outcome[["In-hospital death"]], linewidth = 0.6) +
@@ -667,7 +699,7 @@ if (nrow(hosp_rates) >= 5) {
          title = "Hospital-level: transfer rate vs mortality rate",
          subtitle = toupper(site_lowercase)) +
     theme_clif()
-
+  
   # scatter: external vs same-facility hospice rate (§2.1)
   p_scatter3 = ggplot(hosp_rates, aes(x = hospice_sf_rate, y = hospice_ext_rate)) +
     geom_point(size = 2.5, color = pal_outcome[["External hospice"]]) +
@@ -676,12 +708,12 @@ if (nrow(hosp_rates) >= 5) {
          title = "Hospital-level: same-facility vs external hospice",
          subtitle = toupper(site_lowercase)) +
     theme_clif()
-
+  
   top_row = if (!is.null(p_cat_hu)) (p_cat | p_cat_hu) else p_cat
   p_variation = top_row / (p_scatter | p_scatter2) / p_scatter3
   ggsave(shareable_path(
-                   paste0("aim2a_unadjusted_variation_", site_lowercase, "_", today, ".pdf")),
-         plot = p_variation, width = 12, height = 14, dpi = 300)
+    paste0("aim2a_unadjusted_variation_", site_lowercase, "_", today, ".pdf")),
+    plot = p_variation, width = 12, height = 14, dpi = 300)
   message("  Saved aim2a_unadjusted_variation plots.")
   suppressWarnings(rm(p_cat, p_cat_hu, p_scatter, p_scatter2, p_scatter3, p_variation, hu))
 }
@@ -704,12 +736,12 @@ hosp_rates[, hospice_to_mort_ratio := fifelse(
 hosp_counts = cohort[, .(
   n_death_acute = sum(outcome_category == "in_hospital_death_acute"),
   n_hospice_sf  = sum(outcome_category %in% c("same_facility_hospice_death",
-                                                "same_facility_hospice_alive"))
+                                              "same_facility_hospice_alive"))
 ), by = hospital_unit]
 hosp_counts[, hospice_to_mort_count := round(n_hospice_sf / pmax(n_death_acute, 1), 3)]
 
 hosp_rates = merge(hosp_rates, hosp_counts[, .(hospital_unit, n_death_acute,
-                                                 n_hospice_sf, hospice_to_mort_count)],
+                                               n_hospice_sf, hospice_to_mort_count)],
                    by = "hospital_unit", all.x = TRUE)
 
 message(sprintf("  Hospice-to-mortality ratio: median = %.3f, IQR = %.3f–%.3f",
@@ -719,32 +751,32 @@ message(sprintf("  Hospice-to-mortality ratio: median = %.3f, IQR = %.3f–%.3f"
 
 # 30-day mortality version at death-linked sites
 is_death_linked = "death_linked_site" %in% names(cohort) &&
-                  any(cohort$death_linked_site == 1L, na.rm = TRUE)
+  any(cohort$death_linked_site == 1L, na.rm = TRUE)
 
 if (is_death_linked) {
   message("  Computing hospice-to-30-day-mortality ratio (death-linked site)...")
-
+  
   hosp_30d = cohort[, .(
     n_died_30d = sum(!is.na(days_discharge_to_death) & days_discharge_to_death <= 30 |
                        outcome_category == "in_hospital_death_acute" |
                        outcome_category == "same_facility_hospice_death"),
     n_hospice_all = sum(outcome_category %in% c("same_facility_hospice_death",
-                                                  "same_facility_hospice_alive",
-                                                  "external_hospice_discharge"))
+                                                "same_facility_hospice_alive",
+                                                "external_hospice_discharge"))
   ), by = hospital_unit]
-
+  
   hosp_30d[, hospice_to_30d_mort := round(n_hospice_all / pmax(n_died_30d, 1), 3)]
-
+  
   hosp_rates = merge(hosp_rates, hosp_30d[, .(hospital_unit, hospice_to_30d_mort)],
                      by = "hospital_unit", all.x = TRUE)
-
+  
   message(sprintf("  30-day ratio: median = %.3f (national benchmark = 0.27)",
                   median(hosp_rates$hospice_to_30d_mort, na.rm = TRUE)))
 }
 
 # save
 fwrite(hosp_rates, shareable_path(
-       paste0("aim2a_hospital_ratios_", site_lowercase, "_", today, ".csv")))
+  paste0("aim2a_hospital_ratios_", site_lowercase, "_", today, ".csv")))
 message("  Saved aim2a_hospital_ratios.")
 
 rm(hosp_rates, hosp_counts, var_stats)
@@ -962,64 +994,218 @@ formula_glmm_course  = as.formula(paste("y ~", course_rhs, "+", re_rhs))
 # effect u, so an interval for u maps directly onto an interval for the
 # probability; no nested simulation over patients is needed. Ranks depend only on
 # u, so rank uncertainty is simulated on the hospital effects alone.
-compute_sigma_ci = TRUE   # profile-likelihood CI for sigma^2. This is the slow
-                          # step; set FALSE at very large sites if runtime bites.
+# ---- Interval for sigma^2 -----------------------------------------------------
+# confint(fit, method = "profile") holds theta at each of up to 100 grid points
+# and optimizes the ENTIRE fixed effect vector again at every one. At a site with
+# a few million encounters that is 40 to 100 full refits of the model for a
+# single number, and it is what stalled the first large-site test run.
+#
+# The interval below profiles the SAME likelihood in one dimension, using the
+# nAGQ = 0 deviance function in which the fixed effects are profiled out inside
+# PIRLS. Each grid point is then one PIRLS solve rather than one refit, and the
+# bounds come from root finding on the chi-square(1) cutoff. Cost drops from tens
+# of thousands of PIRLS solves to a few dozen.
+compute_sigma_ci = TRUE   # pre-existing switch, unchanged. FALSE writes NA
+# bounds and skips the interval entirely.
+
+# one-dimensional profile. The nAGQ = 0 deviance function takes theta alone, so
+# no inner optimization over the fixed effects is needed.
+sigma_ci_fast = function(fit, model_dt, level = 0.95) {
+  dd = glmer(formula(fit), data = model_dt, family = binomial(link = "logit"),
+             nAGQ = 0, devFunOnly = TRUE)
+  
+  th = getME(fit, "theta")
+  k  = which(names(th) == "hospital_unit.(Intercept)")
+  if (length(k) != 1L) k = 1L
+  
+  # deviance with the hospital SD held at s. When the site also fits a system or
+  # patient random effect, those variance components are optimized out (cheap:
+  # at most two nuisance parameters).
+  pdev = if (length(th) == 1L) {
+    function(s) dd(s)
+  } else {
+    function(s) {
+      o = optim(as.numeric(th[-k]),
+                function(v) { pp = numeric(length(th)); pp[k] = s; pp[-k] = v; dd(pp) },
+                method = "L-BFGS-B", lower = 0,
+                control = list(maxit = 100, factr = 1e9))
+      o$value
+    }
+  }
+  
+  # the nAGQ = 0 surface has its own minimum, so re-locate it before cutting
+  s_hat = optimize(pdev, interval = c(1e-4, max(10 * as.numeric(th[k]), 1)))$minimum
+  cut   = pdev(s_hat) + qchisq(level, 1)
+  f     = function(s) pdev(s) - cut
+  
+  lo = if (f(1e-6) <= 0) 0 else
+    tryCatch(uniroot(f, c(1e-6, s_hat), tol = 1e-4)$root, error = \(e) NA_real_)
+  
+  # walk the upper bound out until the deviance clears the cutoff
+  s_up = NA_real_
+  for (m in c(2, 4, 8, 16, 32)) if (f(m * s_hat) > 0) { s_up = m * s_hat; break }
+  hi = if (is.na(s_up)) NA_real_ else
+    tryCatch(uniroot(f, c(s_hat, s_up), tol = 1e-4)$root, error = \(e) NA_real_)
+  
+  c(lo^2, hi^2)
+}
+
+# ==== TEMP-SIGMACI: method comparison, delete once the method is settled =======
+# Three blocks carry this tag (here, the call inside fit_binary_glmm, and the
+# export near the end of the script). Deleting all three removes the comparison
+# and leaves the one-dimensional profile as the only interval, which is the
+# intended end state.
+#
+# The exact profile is unaffordable on the full analytic sample at a large site,
+# and it cannot be made affordable by picking a rarer outcome: every model_dt is
+# routine_discharge PLUS one outcome, so the reference group sets the row count
+# and all seven models are nearly the same size. The comparison therefore runs on
+# a SUBSAMPLE of one model, small enough that both methods finish, with both
+# intervals computed from the SAME fit so nothing but the method differs.
+#
+# Subsampling gives each hospital far fewer encounters than the real data, which
+# is the harder case for the nAGQ = 0 approximation. Agreement here is therefore
+# a conservative check: if the two methods match on the subsample, they will
+# match by a wider margin on the full sample.
+sigma_ci_validation_rows = list()   # accumulator; written out at the end
+
+# exact profile likelihood interval (lme4). Correct, and expensive. Used only by
+# the comparison below; nothing in the analysis path calls it.
+sigma_ci_exact = function(fit, level = 0.95, timeout = 5400) {
+  on.exit(setTimeLimit(elapsed = Inf, transient = TRUE))
+  setTimeLimit(elapsed = timeout, transient = TRUE)
+  pr = suppressMessages(suppressWarnings(
+    confint(fit, parm = "theta_", method = "profile", level = level,
+            oldNames = FALSE)))
+  c(pr[1, 1]^2, pr[1, 2]^2)            # theta is on the SD scale -> square it
+}
+
+sigma_ci_validation = function(f_glmm, model_dt, outcome_label, subgroup_label,
+                               n_sub = 150000) {
+  
+  set.seed(20260713)
+  ev  = which(model_dt$y == 1L)
+  ctl = which(model_dt$y == 0L)
+  if (length(ev) < 50L || length(ctl) < 1000L) return(NULL)
+  
+  # keep every event, then take controls up to the row target but never fewer
+  # than 10 per event, so the subsampled model is still estimable
+  n_ctl = min(length(ctl), max(n_sub - length(ev), 10L * length(ev)))
+  sub   = model_dt[c(ev, sample(ctl, n_ctl))]
+  
+  n_hosp_sub = sub[, uniqueN(hospital_unit)]
+  if (n_hosp_sub < 3L || sub[y == 1L, uniqueN(hospital_unit)] < 2L) return(NULL)
+  
+  message(sprintf("    Validating sigma^2 interval on %s: %s rows, %s events, %d hospitals.",
+                  outcome_label, format(nrow(sub), big.mark = ","),
+                  format(length(ev), big.mark = ","), n_hosp_sub))
+  
+  fit_s = glmer(f_glmm, data = sub, family = binomial(link = "logit"), nAGQ = 1,
+                control = glmerControl(optimizer = "bobyqa",
+                                       optCtrl = list(maxfun = 50000),
+                                       calc.derivs = FALSE))
+  
+  vc_s   = as.data.table(VarCorr(fit_s))
+  sig2_s = vc_s[grp == "hospital_unit", vcov][1]
+  if (!is.finite(sig2_s) || sig2_s <= 1e-8) {
+    message("      Subsample fit is singular; no comparison possible.")
+    return(NULL)
+  }
+  
+  t0 = Sys.time()
+  ex = tryCatch(sigma_ci_exact(fit_s),
+                error = \(e) { message("      exact: ", conditionMessage(e))
+                  c(NA_real_, NA_real_) })
+  t_ex = as.numeric(difftime(Sys.time(), t0, units = "mins"))
+  
+  t0 = Sys.time()
+  fa = tryCatch(sigma_ci_fast(fit_s, sub),
+                error = \(e) { message("      fast: ", conditionMessage(e))
+                  c(NA_real_, NA_real_) })
+  t_fa = as.numeric(difftime(Sys.time(), t0, units = "mins"))
+  
+  message(sprintf("      exact [%.4f, %.4f] in %.1f min | fast [%.4f, %.4f] in %.1f min",
+                  ex[1], ex[2], t_ex, fa[1], fa[2], t_fa))
+  
+  data.table(
+    site              = site_lowercase,
+    outcome           = outcome_label,
+    subgroup          = subgroup_label,
+    n_rows_full       = nrow(model_dt),
+    n_rows_sub        = nrow(sub),
+    n_events_sub      = length(ev),
+    n_hospitals_sub   = n_hosp_sub,
+    sigma2_sub        = round(sig2_s, 5),
+    exact_lower       = round(ex[1], 5),
+    exact_upper       = round(ex[2], 5),
+    exact_minutes     = round(t_ex, 2),
+    fast_lower        = round(fa[1], 5),
+    fast_upper        = round(fa[2], 5),
+    fast_minutes      = round(t_fa, 2),
+    abs_diff_lower    = round(fa[1] - ex[1], 5),
+    abs_diff_upper    = round(fa[2] - ex[2], 5),
+    pct_diff_lower    = round(100 * (fa[1] - ex[1]) / max(abs(ex[1]), 1e-8), 2),
+    pct_diff_upper    = round(100 * (fa[2] - ex[2]) / max(abs(ex[2]), 1e-8), 2),
+    width_ratio       = round((fa[2] - fa[1]) / max(ex[2] - ex[1], 1e-8), 3),
+    speedup           = round(t_ex / max(t_fa, 1e-6), 1)
+  )
+}
+# ==== end TEMP-SIGMACI ========================================================
 
 hospital_variation_profile = function(fit, model_dt, outcome_label, subgroup_label,
                                       n_outcome, n_hospitals,
                                       B = 2000, std_n = 10000) {
-
+  
   vc     = as.data.table(VarCorr(fit))
   sigma2 = vc[grp == "hospital_unit", vcov][1]
-
+  
   # a singular / zero-variance fit has no between-hospital variation to profile
   if (!is.finite(sigma2) || sigma2 <= 1e-8) {
     message("      Between-hospital variance is ~0 (singular fit); skipping profiling.")
     return(NULL)
   }
   sigma = sqrt(sigma2)
-
+  
   set.seed(20260713)   # reproducible standardization sample and rank draws
-
+  
   # between-hospital variance, with a profile-likelihood interval (SD scale)
   sig_ci = c(NA_real_, NA_real_)
   if (isTRUE(compute_sigma_ci)) {
-    sig_ci = tryCatch({
-      pr = suppressWarnings(confint(fit, parm = "theta_", method = "profile",
-                                    oldNames = FALSE))
-      c(pr[1, 1]^2, pr[1, 2]^2)          # theta is on the SD scale -> square it
-    }, error = function(e) {
-      message("      sigma^2 profile CI unavailable: ", conditionMessage(e))
+    t_ci   = Sys.time()
+    sig_ci = tryCatch(sigma_ci_fast(fit, model_dt), error = function(e) {
+      message("      sigma^2 CI unavailable: ", conditionMessage(e))
       c(NA_real_, NA_real_)
     })
+    message(sprintf("      sigma^2 CI in %.1f min.",
+                    as.numeric(difftime(Sys.time(), t_ci, units = "mins"))))
   }
-
+  
   # median odds ratio (Larsen & Merlo)
   mor = exp(sqrt(2 * sigma2) * qnorm(0.75))
-
+  
   # empirical-Bayes hospital effects and posterior SDs
   re   = ranef(fit, condVar = TRUE)$hospital_unit
   u    = re[, 1]
   pv   = as.numeric(attr(re, "postVar")[1, 1, ])
   sd_u = sqrt(pv)
-
+  
   # reliability: share of a hospital's apparent variation that is signal.
   # For the normal-normal model, postVar = sigma2 * (1 - reliability).
   reliability = pmin(pmax(1 - pv / sigma2, 0), 1)
-
+  
   # standardized patient population: linear predictor with the hospital effect
   # removed, so every hospital is evaluated on the SAME case mix
   # standardize on the NETWORK standard population if one was distributed
   # (comparable across sites); otherwise fall back to a site-local sample.
   std_dt = if (exists("std_frame") && !is.null(std_frame)) std_frame
-           else if (nrow(model_dt) > std_n) model_dt[sample(.N, std_n)] else model_dt
+  else if (nrow(model_dt) > std_n) model_dt[sample(.N, std_n)] else model_dt
   xb     = predict(fit, newdata = std_dt, re.form = NA, type = "link")
   rsp    = function(uu) mean(plogis(xb + uu))
-
+  
   rs_prob = vapply(u,               rsp, numeric(1))
   rs_lo   = vapply(u - 1.96 * sd_u, rsp, numeric(1))
   rs_hi   = vapply(u + 1.96 * sd_u, rsp, numeric(1))
-
+  
   # rank uncertainty: draw from each hospital's posterior, rank within each draw
   draws    = vapply(seq_along(u), function(j) rnorm(B, u[j], sd_u[j]), numeric(B))
   if (is.null(dim(draws))) draws = matrix(draws, nrow = B)
@@ -1027,7 +1213,7 @@ hospital_variation_profile = function(fit, model_dt, outcome_label, subgroup_lab
   rank_med = apply(rk, 2, median)
   rank_lo  = apply(rk, 2, quantile, probs = 0.025, names = FALSE)
   rank_hi  = apply(rk, 2, quantile, probs = 0.975, names = FALSE)
-
+  
   hosp_tbl = data.table(
     hospital_unit   = rownames(re),
     outcome         = outcome_label,
@@ -1047,11 +1233,11 @@ hospital_variation_profile = function(fit, model_dt, outcome_label, subgroup_lab
     rank_upper      = round(rank_hi, 1),
     n_outcome       = n_outcome
   )
-
+  
   # 10th vs 90th percentile of the hospital random-effect distribution
   p10 = rsp(qnorm(0.10, 0, sigma))
   p90 = rsp(qnorm(0.90, 0, sigma))
-
+  
   summ = data.table(
     outcome               = outcome_label,
     subgroup              = subgroup_label,
@@ -1071,10 +1257,10 @@ hospital_variation_profile = function(fit, model_dt, outcome_label, subgroup_lab
     n_hospitals           = n_hospitals,
     n_standardization     = nrow(std_dt)
   )
-
+  
   message(sprintf("      MOR = %.2f | sigma2 = %.4f | RS prob p10->p90: %.4f -> %.4f (diff %.4f) | median reliability = %.2f",
                   mor, sigma2, p10, p90, p90 - p10, median(reliability)))
-
+  
   list(summary = summ, hospitals = hosp_tbl)
 }
 
@@ -1097,7 +1283,7 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
     ref_dt     = ref_group[pathway_class == "a_available_captured"]
     restricted = TRUE
   }
-
+  
   # any_hospice_disposition is a derived flag spanning same-facility AND external
   # hospice, not a level of outcome_category
   outcome_group = if (outcome_label == "any_hospice_disposition") {
@@ -1205,6 +1391,15 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
                         paste(fit@optinfo$conv$lme4$messages, collapse = "; ")))
       }
       
+      # a rank deficient design matrix makes lme4 drop columns silently. Two
+      # sites can drop DIFFERENT columns, which misaligns the pooled coefficient
+      # table, so name them here rather than leaving it to the console log.
+      col_dropped = attr(getME(fit, "X"), "col.dropped")
+      if (!is.null(col_dropped) && length(col_dropped) > 0) {
+        message(sprintf("      Rank deficient: dropped %s. Usually an empty or collinear factor level.",
+                        paste(names(col_dropped), collapse = ", ")))
+      }
+      
       # extract fixed effects
       coefs = as.data.table(summary(fit)$coefficients, keep.rownames = "term")
       setnames(coefs, c("term", "estimate", "se", "z_value", "p_value"))
@@ -1249,7 +1444,7 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
         subgroup   = subgroup_label,
         site       = site_lowercase
       )
-
+      
       # protocol 2A.3 profiling suite (supersedes ICC as the headline summary)
       prof = tryCatch(
         hospital_variation_profile(fit, model_dt, outcome_label, subgroup_label,
@@ -1258,7 +1453,24 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
           message(sprintf("      Hospital profiling failed: %s", e$message))
           NULL
         })
-
+      
+      # ---- TEMP-SIGMACI: side-by-side check of the interval method, on a
+      # subsample of THIS model. Primary specification, full cohort only.
+      if (subgroup_label == "full_cohort" &&
+          identical(deparse(f_glmm), deparse(formula_glmm)) &&
+          outcome_label %in% c("in_hospital_death_acute",
+                               "external_hospice_discharge")) {
+        v_row = tryCatch(
+          sigma_ci_validation(f_glmm, model_dt, outcome_label, subgroup_label),
+          error = \(e) {
+            message(sprintf("      sigma^2 CI validation failed: %s", e$message))
+            NULL
+          })
+        if (!is.null(v_row))
+          sigma_ci_validation_rows[[length(sigma_ci_validation_rows) + 1L]] <<- v_row
+      }
+      # ---- end TEMP-SIGMACI
+      
       return(list(coefficients = coefs, icc = icc_row, ranef = ranef_dt,
                   var_summary  = if (!is.null(prof)) prof$summary,
                   hosp_profile = if (!is.null(prof)) prof$hospitals))
@@ -1395,12 +1607,12 @@ rm(model_base_full, ref_group_full)
 # subgroup = "one_admission_per_patient" in the standard coefficient tables.
 
 if ("patient_id" %in% names(model_base)) {
-
+  
   model_base_full  = copy(model_base)
   ref_group_full   = ref_group
   n_ref_full       = n_ref
   n_hospitals_full = n_hospitals
-
+  
   if ("admission_dttm" %in% names(model_base)) {
     setorder(model_base, patient_id, admission_dttm)
   } else {
@@ -1410,11 +1622,11 @@ if ("patient_id" %in% names(model_base)) {
   ref_group   = model_base[outcome_category == "routine_discharge"]
   n_ref       = nrow(ref_group)
   n_hospitals = uniqueN(model_base$hospital_unit)
-
+  
   message(sprintf("\n  === One-admission-per-patient sensitivity (%s of %s encounters) ===",
                   format(nrow(model_base), big.mark = ","),
                   format(nrow(model_base_full), big.mark = ",")))
-
+  
   if (n_ref >= 20 && nrow(model_base) >= 100) {
     oneadm_results = lapply(outcomes_to_model, \(out) {
       fit_binary_glmm(out, "one_admission_per_patient",
@@ -1426,14 +1638,14 @@ if ("patient_id" %in% names(model_base)) {
     message("  Too small for modeling -- skipping.")
     oneadm_results = list()
   }
-
+  
   # restore the full analytic sample
   model_base  = model_base_full
   ref_group   = ref_group_full
   n_ref       = n_ref_full
   n_hospitals = n_hospitals_full
   rm(model_base_full, ref_group_full)
-
+  
 } else {
   oneadm_results = list()
 }
@@ -1464,19 +1676,19 @@ hosp_char_path = file.path(project_root, "reference_files", "hospital_characteri
 
 if (file.exists(hosp_char_path)) {
   message("\n  Loading hospital characteristics...")
-
+  
   hosp_char = fread(hosp_char_path, colClasses = c(medicare_id = "character"))
   hosp_char[, medicare_id := stringr::str_pad(medicare_id, 6, "left", "0")]
-
+  
   # merge onto analytic summary (already saved above, reload for enrichment)
   hosp_char_cols = intersect(names(hosp_char), c("medicare_id", "bed_size",
-                             "teaching_status", "icu_beds", "has_hospice_unit"))
+                                                 "teaching_status", "icu_beds", "has_hospice_unit"))
   hosp_char_slim = hosp_char[, ..hosp_char_cols]
-
+  
   # save enriched hospital file for cross-site compilation
   fwrite(hosp_char_slim,
          shareable_path(
-                   paste0("aim2a_hospital_characteristics_", site_lowercase, "_", today, ".csv")))
+           paste0("aim2a_hospital_characteristics_", site_lowercase, "_", today, ".csv")))
   message(sprintf("  Hospital characteristics loaded for %d hospitals.", nrow(hosp_char_slim)))
   rm(hosp_char, hosp_char_slim)
 } else {
@@ -1500,16 +1712,16 @@ mn_ok = requireNamespace("mclogit", quietly = TRUE)
 
 if (mn_ok) {
   library(mclogit)
-
+  
   mn_dt = model_base[outcome_category %in% c("routine_discharge", outcomes_to_model)]
   mn_dt[, outcome_mn := relevel(factor(outcome_category), ref = "routine_discharge")]
-
+  
   message(sprintf("  Multinomial: %s encounters, %d hospitals, %d outcome levels.",
                   format(nrow(mn_dt), big.mark = ","),
                   uniqueN(mn_dt$hospital_unit), nlevels(mn_dt$outcome_mn)))
-
+  
   mn_formula = as.formula(paste("outcome_mn ~", base_rhs))
-
+  
   # Random structure mirrors the binary GLMMs (system term where a site spans
   # multiple systems; patient term is NOT added -- mblogit cannot carry hundreds
   # of thousands of patient levels, and within-patient dependence is handled by
@@ -1520,13 +1732,13 @@ if (mn_ok) {
   message(sprintf("  Multinomial random effects: %s",
                   paste(vapply(if (is.list(mn_random)) mn_random else list(mn_random),
                                \(f) deparse(f[[2]]), character(1)), collapse = " + ")))
-
+  
   mn_fit = tryCatch(
     mblogit(mn_formula, data = mn_dt, random = mn_random,
             control = mmclogit.control(maxit = 100)),
     error = function(e) { message("  Multinomial failed: ", e$message); NULL }
   )
-
+  
   if (!is.null(mn_fit)) {
     mn_coefs = as.data.table(summary(mn_fit)$coefficients, keep.rownames = "term")
     setnames(mn_coefs, 1:5, c("term", "estimate", "se", "z_value", "p_value"))
@@ -1536,7 +1748,7 @@ if (mn_ok) {
       ci_upper = round(exp(estimate + 1.96 * se), 3),
       model_type = "multinomial_mblogit", site = site_lowercase
     )]
-
+    
     mn_vc = tryCatch(VarCov(mn_fit), error = function(e) NULL)
     if (!is.null(mn_vc)) {
       mn_icc = rbindlist(lapply(seq_along(diag(mn_vc[[1]])), \(i) {
@@ -1549,11 +1761,11 @@ if (mn_ok) {
       fwrite(mn_icc, shareable_path(
         paste0("aim2_multinomial_icc_", site_lowercase, "_", today, ".csv")))
     }
-
+    
     fwrite(mn_coefs, shareable_path(
       paste0("aim2_multinomial_coefficients_", site_lowercase, "_", today, ".csv")))
     message("  Saved multinomial model results.")
-
+    
     # -- Risk-standardized disposition composition (protocol 2A.3, Option C) -----
     # For each hospital, predict the full disposition distribution for a COMMON
     # standardized patient population (the same rows for every hospital), then
@@ -1566,10 +1778,10 @@ if (mn_ok) {
       std_n  = 10000L
       set.seed(20260713)
       std_dt = if (exists("std_frame") && !is.null(std_frame)) copy(std_frame)
-               else if (nrow(mn_dt) > std_n) mn_dt[sample(.N, std_n)] else copy(mn_dt)
+      else if (nrow(mn_dt) > std_n) mn_dt[sample(.N, std_n)] else copy(mn_dt)
       hosp_ids = mn_dt[, sort(unique(hospital_unit))]
       lvls = levels(mn_dt$outcome_mn)
-
+      
       comp = rbindlist(lapply(hosp_ids, \(h) {
         nd = copy(std_dt); nd[, hospital_unit := h]
         # mblogit predict returns an N x (#categories) matrix of probabilities
@@ -1584,7 +1796,7 @@ if (mn_ok) {
                   n_standardization = nrow(std_dt))]
       comp
     }, error = \(e) { message("  Multinomial standardization failed: ", e$message); NULL })
-
+    
     if (!is.null(mn_composition)) {
       # QC: every hospital's standardized composition must sum to ~1
       sums = mn_composition[, .(tot = sum(rs_probability)), by = hospital_unit]
@@ -1599,14 +1811,14 @@ if (mn_ok) {
         paste0("aim2a3_rs_composition_", site_lowercase, "_", today, ".csv")))
       message("  Saved aim2a3_rs_composition (risk-standardized disposition composition).")
     }
-
+    
     # -- Option C consistency checks (protocol 2A.3 design) ---------------------
     # The multinomial and the binary GLMMs estimate the SAME contrasts (both use
     # routine_discharge as reference), so they should agree. These run only where
     # the binary GLMMs also fitted, i.e. multi-hospital sites; at a single- or
     # two-hospital site neither model fits and the block is silently skipped.
     if (exists("all_var_summary") && nrow(all_var_summary) > 0 && !is.null(mn_vc)) {
-
+      
       # Check 1: sigma^2 ordering. mblogit is PQL (biased downward); lme4 is
       # Laplace. So for each disposition the multinomial sigma^2 should be <= the
       # binary sigma^2. A multinomial value LARGER than the binary one contradicts
@@ -1623,7 +1835,7 @@ if (mn_ok) {
                           if (chk$sigma2_ordering_ok[i]) "OK"
                           else "** multinomial > binary: check convergence **"))
       }
-
+      
       # Check 2: hospital random effects should correlate across the two models
       # for each disposition. Best-effort -- mblogit's random-effect storage is
       # version-dependent, so a failure here degrades to a message, not an error.
@@ -1651,13 +1863,13 @@ if (mn_ok) {
           message("    [consistency] ranef correlation skipped (unexpected mblogit RE shape).")
         }
       }, error = \(e) message("    [consistency] ranef correlation unavailable: ", conditionMessage(e)))
-
+      
       chk[, `:=`(site = site_lowercase, model_spec = "primary")]
       fwrite(chk, shareable_path(
         paste0("aim2a3_model_consistency_", site_lowercase, "_", today, ".csv")))
       message("  Saved aim2a3_model_consistency (multinomial vs binary GLMM agreement).")
     }
-
+    
     rm(mn_dt, mn_fit, mn_coefs)
     suppressWarnings(rm(mn_vc, mn_icc, mn_composition))
   }
@@ -1699,10 +1911,10 @@ icc_over_time = rbindlist(lapply(era_levels, \(era) {
       s2 = as.data.table(VarCorr(fit))[grp == "hospital_unit", vcov]
       re = ranef(fit)$hospital_unit
       list(summary = data.table(pandemic_period = era, outcome = out,
-                  sigma2_hospital = round(s2, 4), icc = round(s2/(s2 + pi^2/3), 4),
-                  n_hospitals = uniqueN(md$hospital_unit), site = site_lowercase),
+                                sigma2_hospital = round(s2, 4), icc = round(s2/(s2 + pi^2/3), 4),
+                                n_hospitals = uniqueN(md$hospital_unit), site = site_lowercase),
            ranef = data.table(hospital_unit = rownames(re),
-                  ranef_intercept = re[,1], era = era, outcome = out))
+                              ranef_intercept = re[,1], era = era, outcome = out))
     }, error = function(e) NULL)
   }), fill = TRUE)
 }), fill = TRUE)
@@ -1711,7 +1923,7 @@ icc_over_time = rbindlist(lapply(era_levels, \(era) {
 if (length(icc_over_time) > 0 && nrow(icc_over_time) > 0) {
   icc_summary = rbindlist(lapply(icc_over_time$summary, identity), fill = TRUE)
   icc_ranef   = rbindlist(lapply(icc_over_time$ranef, identity), fill = TRUE)
-
+  
   if (!is.null(icc_summary) && nrow(icc_summary) > 0) {
     message("  ICC by era:")
     for (i in seq_len(nrow(icc_summary)))
@@ -1721,7 +1933,7 @@ if (length(icc_over_time) > 0 && nrow(icc_over_time) > 0) {
     fwrite(icc_summary, shareable_path(
       paste0("aim2_icc_over_time_", site_lowercase, "_", today, ".csv")))
   }
-
+  
   # Spearman correlation of hospital random intercepts across eras
   if (!is.null(icc_ranef) && nrow(icc_ranef) > 0) {
     spear_rows = rbindlist(lapply(era_outcomes, \(out) {
@@ -1828,7 +2040,7 @@ if (nrow(all_icc))   all_icc[,   model_spec := "primary"]
 fwrite(
   all_coefs,
   shareable_path(
-            paste0("aim2a3_model_coefficients_", site_lowercase, "_", today, ".csv"))
+    paste0("aim2a3_model_coefficients_", site_lowercase, "_", today, ".csv"))
 )
 message("  Saved aim2a3_model_coefficients.")
 
@@ -1850,7 +2062,7 @@ if (nrow(course_icc)) {
 fwrite(
   all_icc,
   shareable_path(
-            paste0("aim2a3_icc_", site_lowercase, "_", today, ".csv"))
+    paste0("aim2a3_icc_", site_lowercase, "_", today, ".csv"))
 )
 message("  Saved aim2a3_icc.")
 
@@ -1869,6 +2081,26 @@ if (nrow(all_var_summary) > 0) {
   message("  No GLMM fitted -> no variation summary (expected at single-hospital sites).")
 }
 
+# ---- TEMP-SIGMACI: interval method comparison (exact vs one-dimensional).
+# Aggregate only: variance components, interval bounds, and timings. No cells.
+if (length(sigma_ci_validation_rows) > 0) {
+  sigma_ci_check = rbindlist(sigma_ci_validation_rows, fill = TRUE)
+  fwrite(sigma_ci_check, shareable_path(
+    paste0("aim2a3_sigma_ci_validation_", site_lowercase, "_", today, ".csv")))
+  message("  Saved aim2a3_sigma_ci_validation (exact vs fast interval, same fit).")
+  message("\n  ---- sigma^2 interval method comparison ----")
+  for (i in seq_len(nrow(sigma_ci_check))) {
+    r = sigma_ci_check[i]
+    message(sprintf("    %-28s exact [%.4f, %.4f] | fast [%.4f, %.4f] | width ratio %.3f | %.0fx faster",
+                    r$outcome, r$exact_lower, r$exact_upper,
+                    r$fast_lower, r$fast_upper, r$width_ratio, r$speedup))
+  }
+  message("    Bounds agreeing to ~3 decimals support the one-dimensional profile at scale.")
+} else {
+  message("  No sigma^2 interval comparison ran (no eligible full-cohort GLMM).")
+}
+# ---- end TEMP-SIGMACI
+
 if (nrow(all_hosp_profile) > 0) {
   all_hosp_profile[, model_spec := "primary"]
   if (isTRUE(suppress_small_cells_enabled))
@@ -1883,7 +2115,7 @@ if (nrow(all_ranef) > 0) {
   fwrite(
     all_ranef,
     shareable_path(
-              paste0("aim2a3_hospital_ranef_", site_lowercase, "_", today, ".csv"))
+      paste0("aim2a3_hospital_ranef_", site_lowercase, "_", today, ".csv"))
   )
   message("  Saved aim2a3_hospital_ranef.")
 }
