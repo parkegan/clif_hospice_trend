@@ -44,12 +44,7 @@ Thumbs.db
 .idea/
 
 # ---- site-specific config & reference (each site supplies its own) ----------
-# The real config.yaml holds site-specific paths to the CLIF tables; commit a
-# config/config.yaml.example with placeholders instead and keep the working copy
-# out of version control.
 config/config.yaml
-# Files that identify a site's own hospitals:
-reference/hospital_ccn_map.csv
 config/hospital_pathway_map.csv
 
 # ---- study documents & single-site outputs (not part of the shared pipeline) -
@@ -63,6 +58,7 @@ clif_hospice_protocol_*.docx
 # of the shared reference files for cross-site comparability:
 #   reference/crosswalk_ccsr_to_acuity.csv
 #   config/network_standard_population.csv
+#   reference/hospital_ccn_map.csv
 # And the reproducibility anchors:
 #   renv.lock          (pinned package versions)
 #   .here              (project-root anchor for here::here())
