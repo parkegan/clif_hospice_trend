@@ -24,7 +24,7 @@
 # primary cohort to avoid collider bias (see protocol §1.7).
 
 
-# Last updated bpe 22.07.2026
+# Last updated bpe 27.05.2026
 
 
 # 0. source setup --------------------------------------------------------------
@@ -355,7 +355,61 @@ hosp[, in_cohort := fifelse(excl_hospice_admit == 0L, 1L, 0L)]
 n_cohort = sum(hosp$in_cohort == 1L)
 
 message(sprintf("  Excluded — admitted from hospice: %s", format(n_excl_hospice, big.mark = ",")))
-message(sprintf("PRIMARY COHORT: %s hospitalizations", format(n_cohort, big.mark = ",")))
+
+
+# ---- minimum hospital contribution -------------------------------------------
+# Hospitals contributing fewer than min_hospital_encounters to the cohort are
+# removed from it entirely. Two reasons. Statistically, a hospital of a few dozen
+# encounters still receives a random intercept in 04, along with a
+# risk-standardized probability, a reliability, and a rank interval, and it
+# inflates apparent between-hospital variation while carrying almost no
+# information. For disclosure, per-hospital rates on a denominator that small are
+# what cell suppression exists to prevent.
+#
+# This is a NETWORK constant. It must be identical at every site and is not a
+# site-tunable setting.
+#
+# Applied at hospital_id grain, because that is the unit at which a facility
+# contributes data and bears disclosure risk. Where several hospital_ids later
+# collapse to one CCN (§8b), the threshold has already been applied to each
+# component separately, which is the conservative direction.
+min_hospital_encounters = 1000L
+
+hosp[, excl_small_hospital := 0L]
+
+hosp_contrib = hosp[in_cohort == 1L, .(n_encounters = .N),
+                    by = hospital_id][order(n_encounters)]
+small_hospitals = hosp_contrib[n_encounters < min_hospital_encounters, hospital_id]
+
+if (length(small_hospitals) > 0) {
+  hosp[in_cohort == 1L & hospital_id %in% small_hospitals, excl_small_hospital := 1L]
+  hosp[excl_small_hospital == 1L, in_cohort := 0L]
+
+  message(sprintf("  Excluded — %d hospital(s) contributing < %s cohort encounters:",
+                  length(small_hospitals), format(min_hospital_encounters, big.mark = ",")))
+  drop_tbl = hosp_contrib[n_encounters < min_hospital_encounters]
+  for (i in seq_len(nrow(drop_tbl)))
+    message(sprintf("      %-24s %s encounters", drop_tbl$hospital_id[i],
+                    format(drop_tbl$n_encounters[i], big.mark = ",")))
+
+  # named list is site-local and stays local: hospital_id is a facility name at
+  # some sites, and every shareable output in this study is keyed on CCN.
+  # The encounter count reaches the network through the exclusion table below.
+  save_output(cbind(site = site_lowercase, drop_tbl,
+                    threshold = min_hospital_encounters),
+              "hospitals_excluded_small", shareable = FALSE)
+  rm(drop_tbl)
+}
+
+n_excl_small_hosp = sum(hosp$excl_small_hospital == 1L)
+n_cohort          = sum(hosp$in_cohort == 1L)
+rm(hosp_contrib, small_hospitals)
+
+message(sprintf("  Excluded — encounters at those hospitals: %s",
+                format(n_excl_small_hosp, big.mark = ",")))
+message(sprintf("PRIMARY COHORT: %s hospitalizations across %d hospitals",
+                format(n_cohort, big.mark = ","),
+                hosp[in_cohort == 1L, uniqueN(hospital_id)]))
 
 
 # 4. Outcomes ------------------------------------------------------------------
@@ -690,6 +744,9 @@ message(sprintf("    Missing admission or discharge datetime:      %s", format(n
 message(sprintf("    Admission datetime > discharge datetime:      %s", format(n_excl_date_order, big.mark = ",")))
 message(sprintf("  Excluded — missing hospital_id:                 %s", format(n_excl_missing_hid, big.mark = ",")))
 message(sprintf("  Excluded — admitted from hospice:               %s", format(n_excl_hospice, big.mark = ",")))
+message(sprintf("  Excluded — hospital under %s encounters:      %s",
+                format(min_hospital_encounters, big.mark = ","),
+                format(n_excl_small_hosp, big.mark = ",")))
 message(sprintf("  FINAL PRIMARY COHORT:                           %s", format(n_cohort, big.mark = ",")))
 message(sprintf("    With any ICU admission:                       %s (%4.1f%%)",
                 format(sum(cohort$icu_flag == 1L), big.mark = ","),
@@ -717,18 +774,22 @@ message("====================================\n")
 
 exclusion_table = data.table(
   site           = site_lowercase,
-  step           = 1:5,
+  step           = 1:6,
   description    = c(
     "Adult (>=18) inpatient hospitalizations in study window",
     "Excluded: missing or invalid length of stay data",
     "Excluded: missing hospital_id (cannot place at a facility)",
     "Excluded: admitted from hospice",
+    sprintf("Excluded: hospital contributed < %s cohort encounters",
+            format(min_hospital_encounters, big.mark = ",")),
     "Final primary cohort"
   ),
-  n_excluded     = c(0L, n_excl_los, n_excl_missing_hid, n_excl_hospice, 0L),
+  n_excluded     = c(0L, n_excl_los, n_excl_missing_hid, n_excl_hospice,
+                     n_excl_small_hosp, 0L),
   n_remaining    = c(n_total,
                      n_total - n_excl_los,
                      n_total - n_excl_los - n_excl_missing_hid,
+                     n_total - n_excl_los - n_excl_missing_hid - n_excl_hospice,
                      n_cohort, n_cohort)
 )
 

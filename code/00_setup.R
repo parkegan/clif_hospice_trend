@@ -1,7 +1,7 @@
 # 00_setup.R
 # This script loads packages, detects system resources, reads config,
 # loads and validates CLIF tables, and defines shared utility functions.
-# Last updated bpe 22.07.2026
+# Last updated bpe 16.07.2026
 
 
 # install and load packages ----------------------------------------------------
@@ -316,10 +316,17 @@ ccn_map_path = config$hospital_ccn_map_file %||%
 hospital_medicare_map = NULL
 
 if (!file.exists(ccn_map_path)) {
-  warning("Hospital CCN map not found at: ", ccn_map_path,
-          "\n  CCN-level aggregation will be skipped.",
-          "\n  Place hospital_ccn_map.csv in <project_root>/reference/ ",
-          "or set 'hospital_ccn_map_file' in config.yaml.", call. = FALSE)
+  # The map ships with the repository under reference/, so its absence means an
+  # incomplete checkout or a redirected 'hospital_ccn_map_file' in config.yaml,
+  # not an unconfigured site. Every shareable output in this study is keyed on
+  # CCN; running without the map produces a complete set of files keyed on
+  # site-local hospital_id values that cannot be joined to any other site. That
+  # failure stays invisible until pooled assembly, so it is caught here instead.
+  stop("Hospital CCN map not found at: ", ccn_map_path,
+       "\n  This file is tracked in the repository under reference/. Check that ",
+       "the working copy is complete, or that 'hospital_ccn_map_file' in ",
+       "config.yaml points somewhere valid.",
+       "\n  The pipeline cannot produce poolable output without it.", call. = FALSE)
   
 } else {
   
@@ -336,6 +343,11 @@ if (!file.exists(ccn_map_path)) {
     stop("Hospital CCN map is missing required columns: ",
          paste(missing_cols, collapse = ", "), call. = FALSE)
   }
+  
+  # trim both keys: a CSV exported from a spreadsheet routinely carries trailing
+  # whitespace, which makes identical-looking values fail to join
+  ccn_map_full[, hospital_id     := trimws(hospital_id)]
+  ccn_map_full[, hospital_ccn_id := trimws(hospital_ccn_id)]
   
   # standardize column names
   setnames(ccn_map_full, "hospital_ccn_id", "medicare_id")
@@ -361,13 +373,38 @@ if (!file.exists(ccn_map_path)) {
   
   if (nrow(hospital_medicare_map) == 0) {
     available = sort(unique(ccn_map_full$site))
-    warning("No CCN map entries for site '", site_lowercase, "'.",
-            "\n  Available sites in map: ", paste(available, collapse = ", "),
-            "\n  Set 'site_lowercase' or 'institution' in config.yaml ",
-            "to one of these values (case-insensitive).", call. = FALSE)
-    hospital_medicare_map = NULL
+    stop("No CCN map entries for site '", site_lowercase, "'.",
+         "\n  Available sites in map: ", paste(available, collapse = ", "),
+         "\n  Set 'site_lowercase' or 'institution' in config.yaml ",
+         "to one of these values (case-insensitive).", call. = FALSE)
     
   } else {
+    
+    # hospital_id must be unique WITHIN a site. A duplicate would multiply
+    # encounter rows on every merge in 01 and 04, silently inflating counts.
+    # Note this is the opposite of medicare_id, which is legitimately shared
+    # when two campuses are certified under a single CCN.
+    dup_hid = hospital_medicare_map[, .N, by = hospital_id][N > 1]
+    if (nrow(dup_hid) > 0) {
+      stop("Hospital CCN map has duplicate hospital_id value(s) for site '",
+           site_lowercase, "': ", paste(dup_hid$hospital_id, collapse = ", "),
+           "\n  A duplicated join key multiplies encounter rows. Fix the map ",
+           "before re-running.", call. = FALSE)
+    }
+    rm(dup_hid)
+    
+    # a CCN is always six characters. Anything else means the value was mangled
+    # in transit, most often by a spreadsheet stripping a leading zero.
+    bad_ccn = hospital_medicare_map[is.na(medicare_id) | nchar(medicare_id) != 6L]
+    if (nrow(bad_ccn) > 0) {
+      stop("Hospital CCN map has malformed CCN(s) for site '", site_lowercase,
+           "': ", paste(sprintf("%s -> '%s'", bad_ccn$hospital_id,
+                                bad_ccn$medicare_id), collapse = ", "),
+           "\n  CCNs must be six characters. Check the source file was not ",
+           "opened and re-saved in a spreadsheet.", call. = FALSE)
+    }
+    rm(bad_ccn)
+    
     n_hosp = nrow(hospital_medicare_map)
     n_ccn  = uniqueN(hospital_medicare_map$medicare_id)
     message(sprintf("CCN map loaded: %d hospital_id(s) → %d unique CCN(s) for site '%s'",
