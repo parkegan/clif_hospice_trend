@@ -55,10 +55,13 @@
 #   2A.3 secondary (clinical course, separate estimand)
 #     - aim2a3_model_coefficients_clinical_course_{site}.csv
 #     - aim2a3_icc_clinical_course_{site}.csv
-#   Temporary
-#     - aim2a3_sigma_ci_validation_{site}.csv
+#   NOTE: the sigma^2 interval method comparison (exact vs fast, formerly the
+#   TEMP-SIGMACI blocks here) now lives in validate_sigma_ci_ohsu.R, which is
+#   run at OHSU only and is NOT part of the distributed consortium bundle.
+#   Every site, including OHSU, reports the fast one-dimensional profile
+#   interval (sigma_ci_fast below) in production output.
 
-# Last updated bpe 26.08.04
+# Last updated bpe 26.08.18 (removed TEMP-SIGMACI validation; see validate_sigma_ci_ohsu.R)
 
 # 0. setup ---------------------------------------------------------------------
 
@@ -1050,108 +1053,6 @@ sigma_ci_fast = function(fit, model_dt, level = 0.95) {
   c(lo^2, hi^2)
 }
 
-# ==== TEMP-SIGMACI: method comparison, delete once the method is settled =======
-# Three blocks carry this tag (here, the call inside fit_binary_glmm, and the
-# export near the end of the script). Deleting all three removes the comparison
-# and leaves the one-dimensional profile as the only interval, which is the
-# intended end state.
-#
-# The exact profile is unaffordable on the full analytic sample at a large site,
-# and it cannot be made affordable by picking a rarer outcome: every model_dt is
-# routine_discharge PLUS one outcome, so the reference group sets the row count
-# and all seven models are nearly the same size. The comparison therefore runs on
-# a SUBSAMPLE of one model, small enough that both methods finish, with both
-# intervals computed from the SAME fit so nothing but the method differs.
-#
-# Subsampling gives each hospital far fewer encounters than the real data, which
-# is the harder case for the nAGQ = 0 approximation. Agreement here is therefore
-# a conservative check: if the two methods match on the subsample, they will
-# match by a wider margin on the full sample.
-sigma_ci_validation_rows = list()   # accumulator; written out at the end
-
-# exact profile likelihood interval (lme4). Correct, and expensive. Used only by
-# the comparison below; nothing in the analysis path calls it.
-sigma_ci_exact = function(fit, level = 0.95, timeout = 5400) {
-  on.exit(setTimeLimit(elapsed = Inf, transient = TRUE))
-  setTimeLimit(elapsed = timeout, transient = TRUE)
-  pr = suppressMessages(suppressWarnings(
-    confint(fit, parm = "theta_", method = "profile", level = level,
-            oldNames = FALSE)))
-  c(pr[1, 1]^2, pr[1, 2]^2)            # theta is on the SD scale -> square it
-}
-
-sigma_ci_validation = function(f_glmm, model_dt, outcome_label, subgroup_label,
-                               n_sub = 150000) {
-  
-  set.seed(20260713)
-  ev  = which(model_dt$y == 1L)
-  ctl = which(model_dt$y == 0L)
-  if (length(ev) < 50L || length(ctl) < 1000L) return(NULL)
-  
-  # keep every event, then take controls up to the row target but never fewer
-  # than 10 per event, so the subsampled model is still estimable
-  n_ctl = min(length(ctl), max(n_sub - length(ev), 10L * length(ev)))
-  sub   = model_dt[c(ev, sample(ctl, n_ctl))]
-  
-  n_hosp_sub = sub[, uniqueN(hospital_unit)]
-  if (n_hosp_sub < 3L || sub[y == 1L, uniqueN(hospital_unit)] < 2L) return(NULL)
-  
-  message(sprintf("    Validating sigma^2 interval on %s: %s rows, %s events, %d hospitals.",
-                  outcome_label, format(nrow(sub), big.mark = ","),
-                  format(length(ev), big.mark = ","), n_hosp_sub))
-  
-  fit_s = glmer(f_glmm, data = sub, family = binomial(link = "logit"), nAGQ = 1,
-                control = glmerControl(optimizer = "bobyqa",
-                                       optCtrl = list(maxfun = 50000),
-                                       calc.derivs = FALSE))
-  
-  vc_s   = as.data.table(VarCorr(fit_s))
-  sig2_s = vc_s[grp == "hospital_unit", vcov][1]
-  if (!is.finite(sig2_s) || sig2_s <= 1e-8) {
-    message("      Subsample fit is singular; no comparison possible.")
-    return(NULL)
-  }
-  
-  t0 = Sys.time()
-  ex = tryCatch(sigma_ci_exact(fit_s),
-                error = \(e) { message("      exact: ", conditionMessage(e))
-                  c(NA_real_, NA_real_) })
-  t_ex = as.numeric(difftime(Sys.time(), t0, units = "mins"))
-  
-  t0 = Sys.time()
-  fa = tryCatch(sigma_ci_fast(fit_s, sub),
-                error = \(e) { message("      fast: ", conditionMessage(e))
-                  c(NA_real_, NA_real_) })
-  t_fa = as.numeric(difftime(Sys.time(), t0, units = "mins"))
-  
-  message(sprintf("      exact [%.4f, %.4f] in %.1f min | fast [%.4f, %.4f] in %.1f min",
-                  ex[1], ex[2], t_ex, fa[1], fa[2], t_fa))
-  
-  data.table(
-    site              = site_lowercase,
-    outcome           = outcome_label,
-    subgroup          = subgroup_label,
-    n_rows_full       = nrow(model_dt),
-    n_rows_sub        = nrow(sub),
-    n_events_sub      = length(ev),
-    n_hospitals_sub   = n_hosp_sub,
-    sigma2_sub        = round(sig2_s, 5),
-    exact_lower       = round(ex[1], 5),
-    exact_upper       = round(ex[2], 5),
-    exact_minutes     = round(t_ex, 2),
-    fast_lower        = round(fa[1], 5),
-    fast_upper        = round(fa[2], 5),
-    fast_minutes      = round(t_fa, 2),
-    abs_diff_lower    = round(fa[1] - ex[1], 5),
-    abs_diff_upper    = round(fa[2] - ex[2], 5),
-    pct_diff_lower    = round(100 * (fa[1] - ex[1]) / max(abs(ex[1]), 1e-8), 2),
-    pct_diff_upper    = round(100 * (fa[2] - ex[2]) / max(abs(ex[2]), 1e-8), 2),
-    width_ratio       = round((fa[2] - fa[1]) / max(ex[2] - ex[1], 1e-8), 3),
-    speedup           = round(t_ex / max(t_fa, 1e-6), 1)
-  )
-}
-# ==== end TEMP-SIGMACI ========================================================
-
 hospital_variation_profile = function(fit, model_dt, outcome_label, subgroup_label,
                                       n_outcome, n_hospitals,
                                       B = 2000, std_n = 10000) {
@@ -1453,23 +1354,6 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
           message(sprintf("      Hospital profiling failed: %s", e$message))
           NULL
         })
-      
-      # ---- TEMP-SIGMACI: side-by-side check of the interval method, on a
-      # subsample of THIS model. Primary specification, full cohort only.
-      if (subgroup_label == "full_cohort" &&
-          identical(deparse(f_glmm), deparse(formula_glmm)) &&
-          outcome_label %in% c("in_hospital_death_acute",
-                               "external_hospice_discharge")) {
-        v_row = tryCatch(
-          sigma_ci_validation(f_glmm, model_dt, outcome_label, subgroup_label),
-          error = \(e) {
-            message(sprintf("      sigma^2 CI validation failed: %s", e$message))
-            NULL
-          })
-        if (!is.null(v_row))
-          sigma_ci_validation_rows[[length(sigma_ci_validation_rows) + 1L]] <<- v_row
-      }
-      # ---- end TEMP-SIGMACI
       
       return(list(coefficients = coefs, icc = icc_row, ranef = ranef_dt,
                   var_summary  = if (!is.null(prof)) prof$summary,
@@ -2080,26 +1964,6 @@ if (nrow(all_var_summary) > 0) {
 } else {
   message("  No GLMM fitted -> no variation summary (expected at single-hospital sites).")
 }
-
-# ---- TEMP-SIGMACI: interval method comparison (exact vs one-dimensional).
-# Aggregate only: variance components, interval bounds, and timings. No cells.
-if (length(sigma_ci_validation_rows) > 0) {
-  sigma_ci_check = rbindlist(sigma_ci_validation_rows, fill = TRUE)
-  fwrite(sigma_ci_check, shareable_path(
-    paste0("aim2a3_sigma_ci_validation_", site_lowercase, "_", today, ".csv")))
-  message("  Saved aim2a3_sigma_ci_validation (exact vs fast interval, same fit).")
-  message("\n  ---- sigma^2 interval method comparison ----")
-  for (i in seq_len(nrow(sigma_ci_check))) {
-    r = sigma_ci_check[i]
-    message(sprintf("    %-28s exact [%.4f, %.4f] | fast [%.4f, %.4f] | width ratio %.3f | %.0fx faster",
-                    r$outcome, r$exact_lower, r$exact_upper,
-                    r$fast_lower, r$fast_upper, r$width_ratio, r$speedup))
-  }
-  message("    Bounds agreeing to ~3 decimals support the one-dimensional profile at scale.")
-} else {
-  message("  No sigma^2 interval comparison ran (no eligible full-cohort GLMM).")
-}
-# ---- end TEMP-SIGMACI
 
 if (nrow(all_hosp_profile) > 0) {
   all_hosp_profile[, model_spec := "primary"]
