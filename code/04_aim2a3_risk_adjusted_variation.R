@@ -26,9 +26,9 @@
 #     - Pandemic period
 
 # Random effects:
-#     - (1 | hospital_unit)  
-#     - (1 | health_system)  
-#     - (1 | patient_id)     
+#     - (1 | hospital_unit)
+#     - (1 | health_system)
+#     - (1 | patient_id)
 
 # Variation reporting: the protocol replaced the ICC with a profiling suite.
 # The headline quantities are sigma^2 with an interval, the median odds ratio,
@@ -41,7 +41,7 @@
 #     - aim2a_hospital_rates_{site}.csv
 #     - aim2a_hospital_ratios_{site}.csv
 #     - aim2a_variation_stats_{site}.csv
-#     - aim2a_unadjusted_variation_{site}.png 
+#     - aim2a_unadjusted_variation_{site}.png
 #   2A.3 primary
 #     - aim2a3_analytic_summary_{site}.csv           — covariate distributions
 #     - aim2a3_standardization_margins_{site}.csv    — for pooled-standard assembly
@@ -61,7 +61,52 @@
 #   Every site, including OHSU, reports the fast one-dimensional profile
 #   interval (sigma_ci_fast below) in production output.
 
-# Last updated bpe 26.08.18 (removed TEMP-SIGMACI validation; see validate_sigma_ci_ohsu.R)
+#   Added 2026.08.24 changes (folded 2026.08.27):
+#     - aim2a3_timing_{site}.csv                     — per model fit timing (always on)
+#     - aim2_multinomial_status_{site}.csv           — multinomial fit diagnostics (always on)
+#     - clinical course outputs now carry course_window_hours + course_flag_provenance
+#     - coefficient CSVs carry control_sampled, control_fraction, n_reference_used
+
+# Last updated bpe 26.10.07: control_subsample_threshold raised from 500,000
+# to 1,000,000 after review of the first subsampled OHSU run (261007). OHSU
+# (reference 602k) barely crossed the old threshold and took the approximation
+# for a saving it did not need; at 1,000,000 a mid size site runs the exact
+# protocol while truly large sites (UMN reference 2.81M) still sample. Also
+# fixed aim2a3_run_config value serialization: values now format per element,
+# so logicals write as TRUE/FALSE and the threshold writes as 1000000 rather
+# than the 1/0/5e+05 produced by the old as.character(c(...)) coercion.
+#
+# Previous update bpe 26.08.28: runtime triage decision wired in. Control
+# subsampling ENABLED (threshold gated, small sites unaffected); Package A
+# reduction applied as switches (run_multinomial = FALSE, run_era_models =
+# FALSE, run_clinical_course = TRUE); every run now writes
+# aim2a3_run_config_{site}.csv so skipped model families are distinguishable
+# from failed ones at the coordinating center. Skipped multinomial writes its
+# status file with model_type = "disabled".
+#
+# Previous update bpe 26.08.27. That version =
+#   26.08.18 consortium bundle (TEMP-SIGMACI removed)
+#   + the 2026.08.24 and 2026.08.26 changes, folded from the project spec:
+#       1. reference group control subsampling (DEFAULT OFF, switches in section 0;
+#          intercept on sampled scale, RS outputs offset corrected via lp_offset)
+#       2. per model timing instrumentation (always on)
+#       3. windowed clinical course exposures (icu_early_flag + lst_early_flag,
+#          first course_window_hours h, whole stay fallback with provenance)
+#       4. exact row compression (DEFAULT OFF; weights = row_weight on every
+#          binary fit, weighted sigma_ci_fast, weighted standardization draws,
+#          payoff diagnostic always printed; NOT applied to multinomial or era)
+#       5. locked network centering constants (always on: age 65, elix VW 0,
+#          APACHE II 10, imputation 10; margins CSV still reports true site means)
+#   + four BUGFIXES 2026.08.27 (search "BUGFIX 2026.08.27"):
+#       a. era refits: pandemic_period constant within an era killed every era
+#          fit silently -> era RHS now rebuilt per era; failures reported loudly
+#       b. era result collection: nested rbindlist pattern errored the moment a
+#          fit succeeded -> summary/ranef collected separately
+#       c. consistency checks were dead code (all_var_summary did not exist yet)
+#          -> binary profiling assembled before the multinomial block
+#       d. mclogit 0.9.x has no VarCov() function -> read mn_fit$VarCov directly
+#   + aim2_multinomial_status output so a missing multinomial file is
+#     diagnosable from the shareable bundle.
 
 # 0. setup ---------------------------------------------------------------------
 
@@ -76,6 +121,142 @@ for (p in pkg_needed) {
 library(lme4)
 library(ggplot2)
 library(patchwork)
+
+
+## Runtime configuration (added 2026.08.24 changes, folded in 2026.08.27) -------
+
+# Change 1: reference group control subsampling. ENABLED 2026.08.28 per the
+# runtime triage: model cuts alone cannot reach the 12 h target at large sites
+# because the cost is the reference group itself (2.81M routine discharges at
+# UMN riding in every fit). When enabled, fits whose reference group exceeds
+# the threshold keep ALL events and sample controls WITHIN hospital at one
+# global fraction f (about control_ratio controls per event), so hospital
+# effects and sigma^2 are unchanged in expectation. The intercept shifts by
+# exactly log(f); risk standardized outputs are corrected back to population
+# scale via lp_offset in hospital_variation_profile. ORs need no correction;
+# efficiency loss < 5% at 20 controls per event. THRESHOLD GATING means any
+# site whose reference group is under 1,000,000 rows runs the untouched
+# protocol, switch on or off. Threshold raised from 500,000 on 2026.10.07
+# after the first subsampled OHSU run: OHSU (reference 602k) barely crossed
+# the old threshold and paid the Prentice Pyke approximation for about one
+# hour of saving it did not need, while at 1,000,000 OHSU runs the exact
+# protocol and genuinely large sites (UMN 2.81M) still sample. First large
+# site run should be compared against the UMN run 2 benchmarks (the compile
+# script does this automatically).
+control_subsample_enabled   = TRUE
+control_subsample_threshold = 1000000L     # reference rows before sampling kicks in
+control_ratio               = 20L          # target controls per event
+control_subsample_seed      = 20260713L
+
+# Package A reduction (2026.08.28, runtime triage): the multinomial and the
+# era refits are DISABLED as switches, not deletions, so they can be re
+# enabled later without redistributing a different script. Neither has ever
+# produced output at a site to date. The clinical course models are KEPT
+# (Package A retains them; subsampling carries the runtime saving instead).
+# Every run writes aim2a3_run_config_{site}.csv recording these states, so a
+# SKIPPED model family is distinguishable from a FAILED one at the
+# coordinating center.
+run_clinical_course = TRUE
+run_era_models      = FALSE
+run_multinomial     = FALSE
+
+# Change 4 (2026.08.26): EXACT row compression, DEFAULT OFF. Rows identical on
+# every model variable (all.vars of the formula + y, so any random effect
+# structure stays valid automatically) collapse to one row with
+# row_weight = count, and every binary fit runs with weights = row_weight
+# (all 1s when disabled). The weighted binomial likelihood is identical up to
+# a constant: fixed effects, SEs, sigma^2, and ranefs are unchanged; ONLY AIC
+# shifts by a constant, so AIC is comparable only within the same compression
+# setting. No approximation, no offset, no protocol amendment. Composes with
+# subsampling (sample first, then compress). NOT applied to the multinomial or
+# the era refits. A payoff diagnostic always prints before the model loop;
+# when the diagnostic ratio is favorable, prefer compression over subsampling
+# (exact beats approximate).
+row_compress_enabled = FALSE
+
+# Change 5 (2026.08.26): LOCKED network centering constants (always on).
+# Site specific centers make fixed intercepts non comparable and non poolable
+# across sites and put site data into the model spec. Hospital random
+# intercepts, slopes, sigma^2, MOR, ICC, and RS probabilities are INVARIANT to
+# centering (a constant covariate shift is absorbed by the fixed intercept);
+# only the fixed intercept parameterization moves. The APACHE imputation
+# constant is absorbed by the apache2_missing indicator and is locked purely
+# for comparability of that coefficient. With these constants the intercept
+# reads: log odds for a 65 year old, VW 0, APACHE II 10, reference level of
+# every factor.
+center_age_years   = 65
+center_elix_vw     = 0
+center_apache2     = 10
+apache2_impute_val = 10   # was the site median
+
+# Change 3: window (hours from admission) for the EARLY clinical course
+# exposures used by the secondary model. 24 matches the APACHE II window.
+course_window_hours = 24
+
+# Change 2: per model timing collector (always on). Every completed fit appends
+# a row; aim2a3_timing_{site}.csv is written in the export section.
+fit_timings = list()
+record_timing = function(stage, outcome, subgroup, rows, events, t0) {
+  fit_timings[[length(fit_timings) + 1L]] <<- data.table(
+    stage    = stage,
+    outcome  = outcome,
+    subgroup = subgroup,
+    rows     = rows,
+    events   = events,
+    minutes  = round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 2))
+  invisible(NULL)
+}
+
+# Change 1 helper: sample the reference (control) group within hospital at one
+# global fraction f. Returns the rows to use plus the sampling metadata every
+# caller must carry into its outputs.
+subsample_controls = function(ref_dt, n_events) {
+  n_ref_all = nrow(ref_dt)
+  if (!isTRUE(control_subsample_enabled) ||
+      n_ref_all <= control_subsample_threshold ||
+      n_ref_all <= control_ratio * n_events) {
+    return(list(ref = ref_dt, sampled = FALSE, fraction = 1, n_used = n_ref_all))
+  }
+  f = (control_ratio * n_events) / n_ref_all
+  set.seed(control_subsample_seed)
+  idx = ref_dt[, .I[sample.int(.N, max(1L, round(f * .N)))], by = hospital_unit]$V1
+  out = ref_dt[idx]
+  f_realized = nrow(out) / n_ref_all   # use the realized fraction for the offset
+  list(ref = out, sampled = TRUE, fraction = f_realized, n_used = nrow(out))
+}
+
+# ADDED 2026.08.28: the run configuration travels with the shareable bundle.
+# One row per switch, so the coordinating center can read a site's settings
+# from the results themselves rather than from that site's console log.
+# FIXED 2026.10.07: values now serialize per element. The old
+# as.character(c(...)) coerced the mixed vector to numeric first, so logicals
+# printed as 1/0 and the threshold as 5e+05; format() per element keeps
+# TRUE/FALSE and plain integers.
+run_config = data.table(
+  setting = c("control_subsample_enabled", "control_subsample_threshold",
+              "control_ratio", "control_subsample_seed",
+              "row_compress_enabled",
+              "run_clinical_course", "run_era_models", "run_multinomial",
+              "course_window_hours",
+              "center_age_years", "center_elix_vw", "center_apache2",
+              "apache2_impute_val"),
+  value   = vapply(list(control_subsample_enabled, control_subsample_threshold,
+                        control_ratio, control_subsample_seed,
+                        row_compress_enabled,
+                        run_clinical_course, run_era_models, run_multinomial,
+                        course_window_hours,
+                        center_age_years, center_elix_vw, center_apache2,
+                        apache2_impute_val),
+                   function(x) format(x, scientific = FALSE), character(1))
+)
+run_config[, `:=`(site = site_lowercase, script_version = "04_v261007")]
+fwrite(run_config, shareable_path(
+  paste0("aim2a3_run_config_", site_lowercase, "_", today, ".csv")))
+message(sprintf("Run configuration saved (subsampling %s | clinical course %s | era %s | multinomial %s).",
+                ifelse(control_subsample_enabled, "ON", "OFF"),
+                ifelse(run_clinical_course, "ON", "OFF"),
+                ifelse(run_era_models, "ON", "OFF"),
+                ifelse(run_multinomial, "ON", "OFF")))
 
 
 # 1. load cohort ---------------------------------------------------------------
@@ -323,24 +504,24 @@ if (length(apache_fn_path) > 0) {
   if (length(apache_fn_path) > 1) message("  WARNING: multiple APACHE function files found; using ", apache_fn_path[1])
   source(apache_fn_path[1])
   message(sprintf("  Sourced APACHE II function from: %s", apache_fn_path[1]))
-  
+
   # Protocol 2A.3: baseline severity must come from a prespecified EARLY window
   # (first 6 or 24 hours). 24h is also APACHE II's canonical definition (worst
   # values in the first 24 hours). Previously 48h.
   apache = calculate_apache2(data_list, cohort, window_hours = 24)
-  
+
   cohort = merge(cohort,
                  apache[, .(hospitalization_id, apache2_score, apache2_complete)],
                  by = "hospitalization_id", all.x = TRUE)
   cohort[is.na(apache2_score), apache2_score := NA_real_]
-  
+
   n_apache = sum(!is.na(cohort$apache2_score))
   message(sprintf("  APACHE II scores available for %s of %s encounters (%4.1f%%).",
                   format(n_apache, big.mark = ","),
                   format(n_cohort, big.mark = ","),
                   100 * n_apache / n_cohort))
   rm(apache)
-  
+
 } else {
   warning("APACHE II function file not found (function_apache_II.R / fn_apache2.R). ",
           "Searched recursively under:\n    ",
@@ -364,21 +545,24 @@ recode_sex_female(cohort)
 
 ## 2e. Centered and scaled continuous covariates --------------------------------
 
-cohort[, age_centered := age_at_admission - mean(age_at_admission, na.rm = TRUE)]
-cohort[, elix_centered := elixhauser_vw - mean(elixhauser_vw, na.rm = TRUE)]
+# Change 5: centering uses the LOCKED network constants from section 0, not
+# site means, so fixed intercepts are directly comparable and poolable across
+# sites and no site data enters the model spec.
+cohort[, age_centered := age_at_admission - center_age_years]
+cohort[, elix_centered := elixhauser_vw - center_elix_vw]
 
-# APACHE II: center among those with scores; impute median for missing.
+# APACHE II: center at the locked constant; impute the locked constant for
+# missing (change 5; was the site median).
 # Guard the all-missing case: at sites where the APACHE function isn't found
 # (apache_fn_path empty) or required inputs are absent, apache2_score is wholly
-# NA. median(.) is then NA, imputation fills NA with NA, centering propagates
-# NaN, and every row gets dropped by the model_base covariate filter below.
-# When that happens, drop APACHE from the model rather than nuking the cohort.
-apache_med = median(cohort$apache2_score, na.rm = TRUE)
+# NA. The site median is still computed to DETECT that case (and for the
+# standardization margins), but it no longer enters the model.
+apache_med = median(cohort$apache2_score, na.rm = TRUE)   # detection + margins only
 apache2_available = is.finite(apache_med)
 
 if (apache2_available) {
-  cohort[, apache2_imputed  := fifelse(is.na(apache2_score), apache_med, apache2_score)]
-  cohort[, apache2_centered := apache2_imputed - mean(apache2_imputed, na.rm = TRUE)]
+  cohort[, apache2_imputed  := fifelse(is.na(apache2_score), apache2_impute_val, apache2_score)]
+  cohort[, apache2_centered := apache2_imputed - center_apache2]
   cohort[, apache2_missing  := fifelse(is.na(apache2_score), 1L, 0L)]
 } else {
   warning("No non-missing APACHE II scores at this site — ",
@@ -463,6 +647,116 @@ if (!is.na(adm_src_col)) {
 }
 
 
+## 2g. Windowed clinical course exposures (change 3, protocol 2A.3) -------------
+# The secondary clinical course model conditions on EARLY organ support, not
+# whole stay exposure (a whole stay flag can postdate, and be caused by, the
+# hospital's own practice). Definitions mirror script 01 exactly plus the
+# window (course_window_hours from admission, set in section 0):
+#   ICU:  adt location_category icu with 0 <= hours_to_icu <= window
+#         (01 uses >= 0 without the cap)
+#   IMV:  respiratory_support device_category imv,
+#         recorded_dttm <= admission + window (no lower bound, so support
+#         already running at admission counts)
+#   Vaso: medication_admin_continuous med_category in the list below,
+#         admin_dttm <= admission + window
+# RRT stays excluded (as in 01; crrt_therapy coverage too sparse across the
+# consortium). Early LST = IMV union vasopressor; partial unions are never
+# used (if either component fails, BOTH fall back to the whole stay flag).
+# If a source table is missing the affected flag falls back to the whole stay
+# flag with a loud message, and the clinical course outputs carry
+# course_window_hours + course_flag_provenance so the fallback is visible at
+# the coordinating center.
+
+message(sprintf("\n--- Building windowed clinical course exposures (first %d h) ---",
+                course_window_hours))
+
+# KEEP IN SYNC WITH 01 (vasopressor med_category list)
+course_vaso_categories = c("norepinephrine", "vasopressin", "epinephrine",
+                           "phenylephrine", "dopamine")
+
+.window_ids = function(dt_expr) tryCatch(dt_expr(), error = function(e) {
+  message("    source unavailable: ", conditionMessage(e)); NULL })
+
+icu_prov = sprintf("windowed_%dh", course_window_hours)
+lst_prov = sprintf("windowed_%dh", course_window_hours)
+
+# ICU within the window
+icu_early_ids = .window_ids(function() {
+  adt = data_list[["adt"]] |>
+    dplyr::select(hospitalization_id, in_dttm, location_category) |>
+    dplyr::collect() |> as.data.table()
+  adt[, hospitalization_id := as.character(hospitalization_id)]
+  adt = adt[hospitalization_id %chin% cohort$hospitalization_id &
+              tolower(trimws(location_category)) == "icu"]
+  adt = merge(adt, cohort[, .(hospitalization_id, admission_dttm)],
+              by = "hospitalization_id")
+  adt[, hours_to_icu := as.numeric(difftime(in_dttm, admission_dttm, units = "hours"))]
+  unique(adt[hours_to_icu >= 0 & hours_to_icu <= course_window_hours,
+             hospitalization_id])
+})
+
+if (!is.null(icu_early_ids)) {
+  cohort[, icu_early_flag := fifelse(hospitalization_id %chin% icu_early_ids, 1L, 0L)]
+} else {
+  message(sprintf("    FALLBACK: adt unavailable — icu_early_flag set to the WHOLE STAY icu_flag. Clinical course outputs will carry course_flag_provenance = icu=whole_stay_fallback."))
+  cohort[, icu_early_flag := icu_flag]
+  icu_prov = "whole_stay_fallback"
+}
+
+# IMV within the window (no lower bound)
+imv_early_ids = .window_ids(function() {
+  rs = data_list[["respiratory_support"]] |>
+    dplyr::select(hospitalization_id, recorded_dttm, device_category) |>
+    dplyr::collect() |> as.data.table()
+  rs[, hospitalization_id := as.character(hospitalization_id)]
+  rs = rs[hospitalization_id %chin% cohort$hospitalization_id &
+            tolower(trimws(device_category)) == "imv"]
+  rs = merge(rs, cohort[, .(hospitalization_id, admission_dttm)],
+             by = "hospitalization_id")
+  unique(rs[recorded_dttm <= admission_dttm + lubridate::hours(course_window_hours),
+            hospitalization_id])
+})
+
+# vasopressors within the window
+vaso_early_ids = .window_ids(function() {
+  mac = data_list[["medication_admin_continuous"]] |>
+    dplyr::select(hospitalization_id, admin_dttm, med_category) |>
+    dplyr::collect() |> as.data.table()
+  mac[, hospitalization_id := as.character(hospitalization_id)]
+  mac = mac[hospitalization_id %chin% cohort$hospitalization_id &
+              tolower(trimws(med_category)) %in% course_vaso_categories]
+  mac = merge(mac, cohort[, .(hospitalization_id, admission_dttm)],
+              by = "hospitalization_id")
+  unique(mac[admin_dttm <= admission_dttm + lubridate::hours(course_window_hours),
+             hospitalization_id])
+})
+
+if (!is.null(imv_early_ids) && !is.null(vaso_early_ids)) {
+  cohort[, imv_early_flag  := fifelse(hospitalization_id %chin% imv_early_ids,  1L, 0L)]
+  cohort[, vaso_early_flag := fifelse(hospitalization_id %chin% vaso_early_ids, 1L, 0L)]
+  cohort[, lst_early_flag  := pmax(imv_early_flag, vaso_early_flag)]
+} else {
+  # never a partial union: if either component fails, all three fall back
+  message("    FALLBACK: respiratory_support or medication_admin_continuous unavailable — lst_early_flag set to the WHOLE STAY lst_any_flag (never a partial union). Clinical course outputs will carry course_flag_provenance = lst=whole_stay_fallback.")
+  cohort[, imv_early_flag  := imv_flag]
+  cohort[, vaso_early_flag := vaso_flag]
+  cohort[, lst_early_flag  := lst_any_flag]
+  lst_prov = "whole_stay_fallback"
+}
+
+course_flag_provenance = sprintf("icu=%s;lst=%s", icu_prov, lst_prov)
+
+message(sprintf("  Early flags (first %d h): ICU %.1f%% (whole stay %.1f%%) | LST %.1f%% (whole stay %.1f%%) | provenance: %s",
+                course_window_hours,
+                100 * mean(cohort$icu_early_flag, na.rm = TRUE),
+                100 * mean(cohort$icu_flag, na.rm = TRUE),
+                100 * mean(cohort$lst_early_flag, na.rm = TRUE),
+                100 * mean(cohort$lst_any_flag, na.rm = TRUE),
+                course_flag_provenance))
+
+suppressWarnings(rm(icu_early_ids, imv_early_ids, vaso_early_ids))
+
+
 # 2f. Federation standardization frame (protocol 2A.3, Aim 2A federation) -------
 # For hospital estimates to be comparable ACROSS sites, every site must risk-
 # standardize onto the SAME patient population. The coordinating center
@@ -470,12 +764,15 @@ if (!is.na(adm_src_col)) {
 # reapplies ITS OWN centering/level mapping (captured here) and predicts on it.
 # Absent a distributed standard, std_frame stays NULL and the profiling falls
 # back to site-local standardization -- so single-site OHSU behavior is unchanged.
+# Change 5: std_transform carries the LOCKED constants (field names unchanged
+# so apply_std_transform works as before). The standardization margins CSV
+# below still reports TRUE site means for pooled standard assembly.
 std_transform = list(
   apache2_available = apache2_available,
-  age_mean        = mean(cohort$age_at_admission, na.rm = TRUE),
-  elix_mean       = mean(cohort$elixhauser_vw,    na.rm = TRUE),
-  apache_med      = apache_med,
-  apache_imp_mean = if (apache2_available) mean(cohort$apache2_imputed, na.rm = TRUE) else NA_real_,
+  age_mean        = center_age_years,
+  elix_mean       = center_elix_vw,
+  apache_med      = apache2_impute_val,
+  apache_imp_mean = if (apache2_available) center_apache2 else NA_real_,
   dx_levels       = sort(unique(as.character(cohort$dx_category))),
   race_levels     = levels(factor(cohort$race_eth)),
   sex_levels      = sort(unique(as.character(cohort$sex_female))),
@@ -540,12 +837,15 @@ if (!is.null(standard_pop_raw)) {
   out[, covariate := col]
   out[, .(covariate, level, value)]
 }
+# change 5: margins report TRUE site means (not the locked model centers) so
+# the coordinating center can assemble the pooled network standard population
 std_margins = rbindlist(list(
-  data.table(covariate = "age_at_admission", level = "mean", value = round(std_transform$age_mean, 3)),
+  data.table(covariate = "age_at_admission", level = "mean", value = round(mean(cohort$age_at_admission, na.rm = TRUE), 3)),
   data.table(covariate = "age_at_admission", level = "sd",   value = round(sd(cohort$age_at_admission, na.rm = TRUE), 3)),
-  data.table(covariate = "elixhauser_vw",    level = "mean", value = round(std_transform$elix_mean, 3)),
+  data.table(covariate = "elixhauser_vw",    level = "mean", value = round(mean(cohort$elixhauser_vw, na.rm = TRUE), 3)),
   data.table(covariate = "elixhauser_vw",    level = "sd",   value = round(sd(cohort$elixhauser_vw, na.rm = TRUE), 3)),
-  if (apache2_available) data.table(covariate = "apache2", level = "mean", value = round(std_transform$apache_imp_mean, 3)),
+  if (apache2_available) data.table(covariate = "apache2", level = "mean", value = round(mean(cohort$apache2_score, na.rm = TRUE), 3)),
+  if (apache2_available) data.table(covariate = "apache2", level = "median", value = round(apache_med, 3)),
   .marg_cat("sex_female"), .marg_cat("race_eth"), .marg_cat("dx_category"),
   .marg_cat("pandemic_period"), .marg_cat("preexisting_code_status"), .marg_cat("admission_source")
 ), fill = TRUE)
@@ -569,6 +869,8 @@ analytic_summary = cohort[, .(
   pct_female            = round(100 * mean(tolower(sex_category) == "female", na.rm = TRUE), 1),
   pct_icu               = round(100 * mean(icu_flag, na.rm = TRUE), 1),
   pct_lst_any           = round(100 * mean(lst_any_flag, na.rm = TRUE), 1),
+  pct_icu_early         = round(100 * mean(icu_early_flag, na.rm = TRUE), 1),
+  pct_lst_early         = round(100 * mean(lst_early_flag, na.rm = TRUE), 1),
   elix_mean             = round(mean(elixhauser_vw, na.rm = TRUE), 1),
   elix_sd               = round(sd(elixhauser_vw, na.rm = TRUE), 1),
   apache2_mean          = if (apache2_available) round(mean(apache2_imputed, na.rm = TRUE), 1) else NA_real_,
@@ -661,7 +963,7 @@ fwrite(var_stats, shareable_path(
 # caterpillar + bivariate scatter plots
 if (nrow(hosp_rates) >= 5) {
   hosp_rates[, rank := rank(hospice_sf_rate)]
-  
+
   p_cat = ggplot(hosp_rates, aes(x = rank, y = hospice_sf_rate)) +
     geom_point(size = 2.5, color = pal_outcome[["Same-facility hospice"]]) +
     geom_hline(yintercept = median(hosp_rates$hospice_sf_rate),
@@ -670,7 +972,7 @@ if (nrow(hosp_rates) >= 5) {
          title = "Unadjusted variation: same-facility hospice (all hospitals)",
          subtitle = paste0(toupper(site_lowercase), " | ", nrow(hosp_rates), " hospitals")) +
     theme_clif()
-  
+
   # hospice-unit-only version (isolates practice from infrastructure variation)
   hu = hosp_rates[has_hospice_unit == 1L]
   if (nrow(hu) >= 3) {
@@ -686,7 +988,7 @@ if (nrow(hosp_rates) >= 5) {
   } else {
     p_cat_hu = NULL
   }
-  
+
   p_scatter = ggplot(hosp_rates, aes(x = hospice_sf_rate, y = mortality_rate)) +
     geom_point(size = 2.5, color = pal_outcome[["Same-facility hospice"]]) +
     geom_smooth(method = "lm", se = TRUE, color = pal_outcome[["In-hospital death"]], linewidth = 0.6) +
@@ -694,7 +996,7 @@ if (nrow(hosp_rates) >= 5) {
          title = "Hospital-level: hospice rate vs mortality rate",
          subtitle = toupper(site_lowercase)) +
     theme_clif()
-  
+
   p_scatter2 = ggplot(hosp_rates, aes(x = transfer_rate, y = mortality_rate)) +
     geom_point(size = 2.5, color = pal_outcome[["Routine discharge"]]) +
     geom_smooth(method = "lm", se = TRUE, color = pal_outcome[["In-hospital death"]], linewidth = 0.6) +
@@ -702,7 +1004,7 @@ if (nrow(hosp_rates) >= 5) {
          title = "Hospital-level: transfer rate vs mortality rate",
          subtitle = toupper(site_lowercase)) +
     theme_clif()
-  
+
   # scatter: external vs same-facility hospice rate (§2.1)
   p_scatter3 = ggplot(hosp_rates, aes(x = hospice_sf_rate, y = hospice_ext_rate)) +
     geom_point(size = 2.5, color = pal_outcome[["External hospice"]]) +
@@ -711,7 +1013,7 @@ if (nrow(hosp_rates) >= 5) {
          title = "Hospital-level: same-facility vs external hospice",
          subtitle = toupper(site_lowercase)) +
     theme_clif()
-  
+
   top_row = if (!is.null(p_cat_hu)) (p_cat | p_cat_hu) else p_cat
   p_variation = top_row / (p_scatter | p_scatter2) / p_scatter3
   ggsave(shareable_path(
@@ -758,7 +1060,7 @@ is_death_linked = "death_linked_site" %in% names(cohort) &&
 
 if (is_death_linked) {
   message("  Computing hospice-to-30-day-mortality ratio (death-linked site)...")
-  
+
   hosp_30d = cohort[, .(
     n_died_30d = sum(!is.na(days_discharge_to_death) & days_discharge_to_death <= 30 |
                        outcome_category == "in_hospital_death_acute" |
@@ -767,12 +1069,12 @@ if (is_death_linked) {
                                                 "same_facility_hospice_alive",
                                                 "external_hospice_discharge"))
   ), by = hospital_unit]
-  
+
   hosp_30d[, hospice_to_30d_mort := round(n_hospice_all / pmax(n_died_30d, 1), 3)]
-  
+
   hosp_rates = merge(hosp_rates, hosp_30d[, .(hospital_unit, hospice_to_30d_mort)],
                      by = "hospital_unit", all.x = TRUE)
-  
+
   message(sprintf("  30-day ratio: median = %.3f (national benchmark = 0.27)",
                   median(hosp_rates$hospice_to_30d_mort, na.rm = TRUE)))
 }
@@ -975,10 +1277,12 @@ formula_glmm_nopat = as.formula(paste("y ~", base_rhs, "+", re_rhs_nopat))
 # DIFFERENT ESTIMAND and requires it be reported separately, so it is fit on the
 # full cohort only and written to its own output files -- it never mixes into the
 # primary coefficient/ICC tables.
-# CAVEAT: icu_flag and lst_any_flag are whole-stay exposures. The protocol asks
-# for EARLY organ support (or maximum early severity). Windowing these to the
-# first 6/24 hours is a follow-up; until then this model is an approximation.
-course_rhs = paste(c(base_rhs, "icu_flag", "lst_any_flag"), collapse = " + ")
+# Change 3 (2026.08.24, folded 2026.08.27): the exposures are now the EARLY
+# windowed flags built in section 2g (first course_window_hours from
+# admission), closing the protocol caveat about whole stay exposures. The
+# whole stay flags remain the SUBGROUP definitions (lst_any / icu_only),
+# unchanged.
+course_rhs = paste(c(base_rhs, "icu_early_flag", "lst_early_flag"), collapse = " + ")
 message(sprintf("  Clinical-course model RHS: %s", course_rhs))
 
 formula_fixed_course = as.formula(paste("y ~", course_rhs))
@@ -1014,13 +1318,20 @@ compute_sigma_ci = TRUE   # pre-existing switch, unchanged. FALSE writes NA
 # one-dimensional profile. The nAGQ = 0 deviance function takes theta alone, so
 # no inner optimization over the fixed effects is needed.
 sigma_ci_fast = function(fit, model_dt, level = 0.95) {
-  dd = glmer(formula(fit), data = model_dt, family = binomial(link = "logit"),
-             nAGQ = 0, devFunOnly = TRUE)
-  
+  # change 4: the deviance surface must use the same weights as the fit
+  # (the standalone validation script copy stays intentionally unweighted)
+  dd = if ("row_weight" %in% names(model_dt)) {
+    glmer(formula(fit), data = model_dt, family = binomial(link = "logit"),
+          weights = row_weight, nAGQ = 0, devFunOnly = TRUE)
+  } else {
+    glmer(formula(fit), data = model_dt, family = binomial(link = "logit"),
+          nAGQ = 0, devFunOnly = TRUE)
+  }
+
   th = getME(fit, "theta")
   k  = which(names(th) == "hospital_unit.(Intercept)")
   if (length(k) != 1L) k = 1L
-  
+
   # deviance with the hospital SD held at s. When the site also fits a system or
   # patient random effect, those variance components are optimized out (cheap:
   # at most two nuisance parameters).
@@ -1035,40 +1346,46 @@ sigma_ci_fast = function(fit, model_dt, level = 0.95) {
       o$value
     }
   }
-  
+
   # the nAGQ = 0 surface has its own minimum, so re-locate it before cutting
   s_hat = optimize(pdev, interval = c(1e-4, max(10 * as.numeric(th[k]), 1)))$minimum
   cut   = pdev(s_hat) + qchisq(level, 1)
   f     = function(s) pdev(s) - cut
-  
+
   lo = if (f(1e-6) <= 0) 0 else
     tryCatch(uniroot(f, c(1e-6, s_hat), tol = 1e-4)$root, error = \(e) NA_real_)
-  
+
   # walk the upper bound out until the deviance clears the cutoff
   s_up = NA_real_
   for (m in c(2, 4, 8, 16, 32)) if (f(m * s_hat) > 0) { s_up = m * s_hat; break }
   hi = if (is.na(s_up)) NA_real_ else
     tryCatch(uniroot(f, c(s_hat, s_up), tol = 1e-4)$root, error = \(e) NA_real_)
-  
+
   c(lo^2, hi^2)
 }
 
+# lp_offset (change 1): when the fit used control subsampling at fraction f,
+# the fitted intercept is on the sampled scale (sampled = true - log(f), with
+# log(f) negative). Passing lp_offset = log(f) restores the population scale
+# linear predictor inside the standardization, so RS probabilities and the
+# p10/p90 contrast are population scale. sigma^2, MOR, ICC, reliability, and
+# ranks depend only on the random effects and need no correction.
 hospital_variation_profile = function(fit, model_dt, outcome_label, subgroup_label,
                                       n_outcome, n_hospitals,
-                                      B = 2000, std_n = 10000) {
-  
+                                      B = 2000, std_n = 10000, lp_offset = 0) {
+
   vc     = as.data.table(VarCorr(fit))
   sigma2 = vc[grp == "hospital_unit", vcov][1]
-  
+
   # a singular / zero-variance fit has no between-hospital variation to profile
   if (!is.finite(sigma2) || sigma2 <= 1e-8) {
     message("      Between-hospital variance is ~0 (singular fit); skipping profiling.")
     return(NULL)
   }
   sigma = sqrt(sigma2)
-  
+
   set.seed(20260713)   # reproducible standardization sample and rank draws
-  
+
   # between-hospital variance, with a profile-likelihood interval (SD scale)
   sig_ci = c(NA_real_, NA_real_)
   if (isTRUE(compute_sigma_ci)) {
@@ -1080,33 +1397,38 @@ hospital_variation_profile = function(fit, model_dt, outcome_label, subgroup_lab
     message(sprintf("      sigma^2 CI in %.1f min.",
                     as.numeric(difftime(Sys.time(), t_ci, units = "mins"))))
   }
-  
+
   # median odds ratio (Larsen & Merlo)
   mor = exp(sqrt(2 * sigma2) * qnorm(0.75))
-  
+
   # empirical-Bayes hospital effects and posterior SDs
   re   = ranef(fit, condVar = TRUE)$hospital_unit
   u    = re[, 1]
   pv   = as.numeric(attr(re, "postVar")[1, 1, ])
   sd_u = sqrt(pv)
-  
+
   # reliability: share of a hospital's apparent variation that is signal.
   # For the normal-normal model, postVar = sigma2 * (1 - reliability).
   reliability = pmin(pmax(1 - pv / sigma2, 0), 1)
-  
+
   # standardized patient population: linear predictor with the hospital effect
   # removed, so every hospital is evaluated on the SAME case mix
   # standardize on the NETWORK standard population if one was distributed
   # (comparable across sites); otherwise fall back to a site-local sample.
+  # change 4: when rows are compressed patterns, draw patterns with prob
+  # proportional to row_weight (with replacement) to recover the encounter
+  # level case mix in the site local standardization sample
   std_dt = if (exists("std_frame") && !is.null(std_frame)) std_frame
+  else if ("row_weight" %in% names(model_dt) && any(model_dt$row_weight > 1L))
+    model_dt[sample(.N, std_n, replace = TRUE, prob = row_weight)]
   else if (nrow(model_dt) > std_n) model_dt[sample(.N, std_n)] else model_dt
-  xb     = predict(fit, newdata = std_dt, re.form = NA, type = "link")
+  xb     = predict(fit, newdata = std_dt, re.form = NA, type = "link") + lp_offset
   rsp    = function(uu) mean(plogis(xb + uu))
-  
+
   rs_prob = vapply(u,               rsp, numeric(1))
   rs_lo   = vapply(u - 1.96 * sd_u, rsp, numeric(1))
   rs_hi   = vapply(u + 1.96 * sd_u, rsp, numeric(1))
-  
+
   # rank uncertainty: draw from each hospital's posterior, rank within each draw
   draws    = vapply(seq_along(u), function(j) rnorm(B, u[j], sd_u[j]), numeric(B))
   if (is.null(dim(draws))) draws = matrix(draws, nrow = B)
@@ -1114,7 +1436,7 @@ hospital_variation_profile = function(fit, model_dt, outcome_label, subgroup_lab
   rank_med = apply(rk, 2, median)
   rank_lo  = apply(rk, 2, quantile, probs = 0.025, names = FALSE)
   rank_hi  = apply(rk, 2, quantile, probs = 0.975, names = FALSE)
-  
+
   hosp_tbl = data.table(
     hospital_unit   = rownames(re),
     outcome         = outcome_label,
@@ -1134,11 +1456,11 @@ hospital_variation_profile = function(fit, model_dt, outcome_label, subgroup_lab
     rank_upper      = round(rank_hi, 1),
     n_outcome       = n_outcome
   )
-  
+
   # 10th vs 90th percentile of the hospital random-effect distribution
   p10 = rsp(qnorm(0.10, 0, sigma))
   p90 = rsp(qnorm(0.90, 0, sigma))
-  
+
   summ = data.table(
     outcome               = outcome_label,
     subgroup              = subgroup_label,
@@ -1158,18 +1480,19 @@ hospital_variation_profile = function(fit, model_dt, outcome_label, subgroup_lab
     n_hospitals           = n_hospitals,
     n_standardization     = nrow(std_dt)
   )
-  
+
   message(sprintf("      MOR = %.2f | sigma2 = %.4f | RS prob p10->p90: %.4f -> %.4f (diff %.4f) | median reliability = %.2f",
                   mor, sigma2, p10, p90, p90 - p10, median(reliability)))
-  
+
   list(summary = summ, hospitals = hosp_tbl)
 }
 
 
 # function to fit one binary GLMM
 fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
-                           f_fixed = formula_fixed, f_glmm = formula_glmm) {
-  
+                           f_fixed = formula_fixed, f_glmm = formula_glmm,
+                           stage_label = "primary") {
+
   # protocol §3.4.4: the PRIMARY same-facility analysis is CONDITIONAL on class (a)
   # hospitals (pathway available and reliably captured). At other hospitals the
   # absence of the pathway is a structural / data-capture fact, not a clinical
@@ -1184,7 +1507,7 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
     ref_dt     = ref_group[pathway_class == "a_available_captured"]
     restricted = TRUE
   }
-  
+
   # any_hospice_disposition is a derived flag spanning same-facility AND external
   # hospice, not a level of outcome_category
   outcome_group = if (outcome_label == "any_hospice_disposition") {
@@ -1193,41 +1516,73 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
     base_dt[outcome_category == outcome_label]
   }
   n_outcome = nrow(outcome_group)
-  
+
   if (n_outcome < 20) {
     message(sprintf("    %s: only %d events — skipping.", outcome_label, n_outcome))
     return(NULL)
   }
-  
+
+  # change 1: control subsampling (no-op unless enabled and the reference
+  # group is above the threshold). All events kept; controls sampled within
+  # hospital at one global fraction.
+  ss = subsample_controls(ref_dt, n_outcome)
+  if (ss$sampled)
+    message(sprintf("    %s: reference subsampled %s -> %s controls (f = %.5f); intercept on sampled scale, RS outputs offset corrected.",
+                    outcome_label,
+                    format(nrow(ref_dt), big.mark = ","),
+                    format(ss$n_used, big.mark = ","), ss$fraction))
+
   # combine reference + outcome
-  model_dt = rbind(ref_dt, outcome_group)
+  model_dt = rbind(ss$ref, outcome_group)
   model_dt[, y := if (outcome_label == "any_hospice_disposition") {
     as.integer(any_hospice_disposition)
   } else {
     fifelse(outcome_category == outcome_label, 1L, 0L)
   }]
-  
+
   # hospital counts must reflect the (possibly restricted) analytic sample
   n_hospitals_eff  = model_dt[, uniqueN(hospital_unit)]
   hosp_with_events = model_dt[y == 1L, uniqueN(hospital_unit)]
-  
+
+  # change 4: exact row compression (after subsampling: sample first, then
+  # compress). Keys = all.vars of the fitted formula + y, so any random effect
+  # structure stays valid automatically. Every fit below runs with
+  # weights = row_weight (all 1s when compression is off); the weighted
+  # binomial likelihood is identical up to a constant, so only AIC shifts
+  # (comparable only within the same compression setting).
+  model_dt[, row_weight := 1L]
+  compression_ratio = 1
+  if (isTRUE(row_compress_enabled)) {
+    comp_keys = intersect(unique(c(all.vars(f_glmm), "y")), names(model_dt))
+    n_before  = nrow(model_dt)
+    model_dt  = model_dt[, .(row_weight = .N), by = comp_keys]
+    compression_ratio = round(nrow(model_dt) / n_before, 4)
+    message(sprintf("    %s: row compressed %s -> %s rows (ratio %.3f).",
+                    outcome_label, format(n_before, big.mark = ","),
+                    format(nrow(model_dt), big.mark = ","), compression_ratio))
+  }
+
   if (restricted) {
     message(sprintf("    %s: restricted to class (a) hospitals — %d of %d, %s encounters.",
                     outcome_label, n_hospitals_eff, n_hospitals,
                     format(nrow(model_dt), big.mark = ",")))
   }
-  
+
   if (n_hospitals_eff < 3 || hosp_with_events < 2) {
     message(sprintf("    %s: insufficient hospital units (%d total, %d with events) — fitting fixed effects only.",
                     outcome_label, n_hospitals_eff, hosp_with_events))
-    
+
     # fixed-effects logistic regression (no random intercepts)
     tryCatch({
+      t_fit = Sys.time()
       fit_fixed = glm(
         f_fixed,
-        data = model_dt, family = binomial(link = "logit")
+        data = model_dt, family = binomial(link = "logit"),
+        weights = row_weight            # change 4: all 1s unless compressed
       )
-      
+      record_timing(paste0(stage_label, "_fixed"), outcome_label, subgroup_label,
+                    nrow(model_dt), n_outcome, t_fit)
+
       coefs = as.data.table(summary(fit_fixed)$coefficients, keep.rownames = "term")
       setnames(coefs, c("term", "estimate", "se", "z_value", "p_value"))
       coefs[, `:=`(
@@ -1241,9 +1596,14 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
         n_outcome  = n_outcome,
         n_reference = n_ref,
         n_hospitals_eff = n_hospitals_eff,
-        aic        = round(AIC(fit_fixed), 1)
+        aic        = round(AIC(fit_fixed), 1),
+        control_sampled  = ss$sampled,
+        control_fraction = round(ss$fraction, 6),
+        n_reference_used = ss$n_used,
+        row_compressed   = isTRUE(row_compress_enabled),
+        compression_ratio = compression_ratio
       )]
-      
+
       # no ICC for fixed-effects model
       icc_row = data.table(
         outcome    = outcome_label,
@@ -1255,29 +1615,31 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
         n_outcome       = n_outcome,
         n_hospitals_eff     = n_hospitals_eff
       )
-      
+
       ranef_dt = NULL
-      
+
       return(list(coefficients = coefs, icc = icc_row, ranef = ranef_dt))
-      
+
     }, error = \(e) {
       message(sprintf("    %s: fixed-effects model failed: %s", outcome_label, e$message))
       return(NULL)
     })
-    
+
   } else {
-    
+
     # mixed-effects logistic regression
     message(sprintf("    %s: fitting GLMM (n=%s events, %d hospitals)...",
                     outcome_label,
                     format(n_outcome, big.mark = ","),
                     n_hospitals_eff))
-    
+
     tryCatch({
+      t_fit = Sys.time()
       fit = glmer(
         f_glmm,
         data    = model_dt,
         family  = binomial(link = "logit"),
+        weights = row_weight,              # change 4: all 1s unless compressed
         nAGQ    = 1,                       # Laplace for speed; 1 is standard
         control = glmerControl(
           optimizer  = "bobyqa",
@@ -1285,13 +1647,15 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
           calc.derivs = FALSE              # skip Hessian for speed
         )
       )
-      
+      record_timing(paste0(stage_label, "_glmm"), outcome_label, subgroup_label,
+                    nrow(model_dt), n_outcome, t_fit)
+
       # check convergence
       if (!is.null(fit@optinfo$conv$lme4)) {
         message(sprintf("      Convergence warning: %s",
                         paste(fit@optinfo$conv$lme4$messages, collapse = "; ")))
       }
-      
+
       # a rank deficient design matrix makes lme4 drop columns silently. Two
       # sites can drop DIFFERENT columns, which misaligns the pooled coefficient
       # table, so name them here rather than leaving it to the console log.
@@ -1300,7 +1664,7 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
         message(sprintf("      Rank deficient: dropped %s. Usually an empty or collinear factor level.",
                         paste(names(col_dropped), collapse = ", ")))
       }
-      
+
       # extract fixed effects
       coefs = as.data.table(summary(fit)$coefficients, keep.rownames = "term")
       setnames(coefs, c("term", "estimate", "se", "z_value", "p_value"))
@@ -1315,14 +1679,19 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
         n_outcome  = n_outcome,
         n_reference = n_ref,
         n_hospitals_eff = n_hospitals_eff,
-        aic        = round(AIC(fit), 1)
+        aic        = round(AIC(fit), 1),
+        control_sampled  = ss$sampled,
+        control_fraction = round(ss$fraction, 6),
+        n_reference_used = ss$n_used,
+        row_compressed   = isTRUE(row_compress_enabled),
+        compression_ratio = compression_ratio
       )]
-      
+
       # ICC: σ²_hospital / (σ²_hospital + π²/3)
       vc = as.data.table(VarCorr(fit))
       sigma2_hosp = vc[grp == "hospital_unit", vcov]
       icc_val = sigma2_hosp / (sigma2_hosp + (pi^2 / 3))
-      
+
       icc_row = data.table(
         outcome         = outcome_label,
         subgroup        = subgroup_label,
@@ -1333,9 +1702,9 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
         n_outcome       = n_outcome,
         n_hospitals_eff     = n_hospitals_eff
       )
-      
+
       message(sprintf("      ICC = %.4f (σ² = %.4f)", icc_val, sigma2_hosp))
-      
+
       # hospital random intercepts (BLUPs)
       re = ranef(fit)$hospital_unit
       ranef_dt = data.table(
@@ -1345,31 +1714,37 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
         subgroup   = subgroup_label,
         site       = site_lowercase
       )
-      
+
       # protocol 2A.3 profiling suite (supersedes ICC as the headline summary)
+      # lp_offset restores population scale when controls were subsampled
       prof = tryCatch(
         hospital_variation_profile(fit, model_dt, outcome_label, subgroup_label,
-                                   n_outcome, n_hospitals_eff),
+                                   n_outcome, n_hospitals_eff,
+                                   lp_offset = if (ss$sampled) log(ss$fraction) else 0),
         error = \(e) {
           message(sprintf("      Hospital profiling failed: %s", e$message))
           NULL
         })
-      
+
       return(list(coefficients = coefs, icc = icc_row, ranef = ranef_dt,
                   var_summary  = if (!is.null(prof)) prof$summary,
                   hosp_profile = if (!is.null(prof)) prof$hospitals))
-      
+
     }, error = \(e) {
       message(sprintf("    %s: GLMM failed: %s", outcome_label, e$message))
-      
+
       # fallback to fixed effects
       message(sprintf("    %s: falling back to fixed-effects model.", outcome_label))
       tryCatch({
+        t_fit = Sys.time()
         fit_fixed = glm(
           f_fixed,
-          data = model_dt, family = binomial(link = "logit")
+          data = model_dt, family = binomial(link = "logit"),
+          weights = row_weight          # change 4: all 1s unless compressed
         )
-        
+        record_timing(paste0(stage_label, "_fixed_fallback"), outcome_label,
+                      subgroup_label, nrow(model_dt), n_outcome, t_fit)
+
         coefs = as.data.table(summary(fit_fixed)$coefficients, keep.rownames = "term")
         setnames(coefs, c("term", "estimate", "se", "z_value", "p_value"))
         coefs[, `:=`(
@@ -1383,18 +1758,23 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
           n_outcome  = n_outcome,
           n_reference = n_ref,
           n_hospitals_eff = n_hospitals_eff,
-          aic        = round(AIC(fit_fixed), 1)
+          aic        = round(AIC(fit_fixed), 1),
+          control_sampled  = ss$sampled,
+          control_fraction = round(ss$fraction, 6),
+          n_reference_used = ss$n_used,
+          row_compressed   = isTRUE(row_compress_enabled),
+          compression_ratio = compression_ratio
         )]
-        
+
         icc_row = data.table(
           outcome = outcome_label, subgroup = subgroup_label,
           site = site_lowercase, model_type = "fixed_fallback",
           sigma2_hospital = NA_real_, icc = NA_real_,
           n_outcome = n_outcome, n_hospitals_eff = n_hospitals_eff
         )
-        
+
         return(list(coefficients = coefs, icc = icc_row, ranef = NULL))
-        
+
       }, error = \(e2) {
         message(sprintf("    %s: fixed-effects fallback also failed: %s",
                         outcome_label, e2$message))
@@ -1403,6 +1783,20 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
     })
   }
 }
+
+
+# --- Change 4 payoff diagnostic (always printed) ---
+# How much would exact row compression shrink the design? Computed on the
+# primary model variables over the analytic sample (y adds at most a factor
+# of ~2 per fit). Decide row_compress_enabled from this line in the site log.
+diag_vars  = intersect(all.vars(formula_glmm), names(model_base))
+n_patterns = nrow(unique(model_base[, ..diag_vars]))
+message(sprintf("\n  Row compression diagnostic: %s unique covariate patterns / %s encounters (shrink factor %.2f). row_compress_enabled = %s.",
+                format(n_patterns, big.mark = ","),
+                format(nrow(model_base), big.mark = ","),
+                nrow(model_base) / max(n_patterns, 1L),
+                row_compress_enabled))
+rm(diag_vars, n_patterns)
 
 
 # --- Run models for full cohort ---
@@ -1491,12 +1885,12 @@ rm(model_base_full, ref_group_full)
 # subgroup = "one_admission_per_patient" in the standard coefficient tables.
 
 if ("patient_id" %in% names(model_base)) {
-  
+
   model_base_full  = copy(model_base)
   ref_group_full   = ref_group
   n_ref_full       = n_ref
   n_hospitals_full = n_hospitals
-  
+
   if ("admission_dttm" %in% names(model_base)) {
     setorder(model_base, patient_id, admission_dttm)
   } else {
@@ -1506,11 +1900,11 @@ if ("patient_id" %in% names(model_base)) {
   ref_group   = model_base[outcome_category == "routine_discharge"]
   n_ref       = nrow(ref_group)
   n_hospitals = uniqueN(model_base$hospital_unit)
-  
+
   message(sprintf("\n  === One-admission-per-patient sensitivity (%s of %s encounters) ===",
                   format(nrow(model_base), big.mark = ","),
                   format(nrow(model_base_full), big.mark = ",")))
-  
+
   if (n_ref >= 20 && nrow(model_base) >= 100) {
     oneadm_results = lapply(outcomes_to_model, \(out) {
       fit_binary_glmm(out, "one_admission_per_patient",
@@ -1522,14 +1916,14 @@ if ("patient_id" %in% names(model_base)) {
     message("  Too small for modeling -- skipping.")
     oneadm_results = list()
   }
-  
+
   # restore the full analytic sample
   model_base  = model_base_full
   ref_group   = ref_group_full
   n_ref       = n_ref_full
   n_hospitals = n_hospitals_full
   rm(model_base_full, ref_group_full)
-  
+
 } else {
   oneadm_results = list()
 }
@@ -1542,11 +1936,17 @@ if ("patient_id" %in% names(model_base)) {
 
 message("\n  === Secondary clinical-course models (full cohort) ===")
 
-course_results = lapply(outcomes_to_model, \(out) {
-  fit_binary_glmm(out, "full_cohort", formula_fixed_course, formula_glmm_course)
-})
-names(course_results) = outcomes_to_model
-course_results = Filter(Negate(is.null), course_results)
+if (isTRUE(run_clinical_course)) {
+  course_results = lapply(outcomes_to_model, \(out) {
+    fit_binary_glmm(out, "full_cohort", formula_fixed_course, formula_glmm_course,
+                    stage_label = "clinical_course")
+  })
+  names(course_results) = outcomes_to_model
+  course_results = Filter(Negate(is.null), course_results)
+} else {
+  message("  DISABLED by run_clinical_course = FALSE (recorded in aim2a3_run_config).")
+  course_results = list()
+}
 
 
 # --- Hospital characteristics (conditional on reference file) ---
@@ -1560,15 +1960,15 @@ hosp_char_path = file.path(project_root, "reference_files", "hospital_characteri
 
 if (file.exists(hosp_char_path)) {
   message("\n  Loading hospital characteristics...")
-  
+
   hosp_char = fread(hosp_char_path, colClasses = c(medicare_id = "character"))
   hosp_char[, medicare_id := stringr::str_pad(medicare_id, 6, "left", "0")]
-  
+
   # merge onto analytic summary (already saved above, reload for enrichment)
   hosp_char_cols = intersect(names(hosp_char), c("medicare_id", "bed_size",
                                                  "teaching_status", "icu_beds", "has_hospice_unit"))
   hosp_char_slim = hosp_char[, ..hosp_char_cols]
-  
+
   # save enriched hospital file for cross-site compilation
   fwrite(hosp_char_slim,
          shareable_path(
@@ -1592,20 +1992,88 @@ if (file.exists(hosp_char_path)) {
 
 message("\n--- Analysis 2.2: Multinomial mixed model (primary) ---")
 
+# BUGFIX 2026.08.27: the Option C consistency checks below were guarded by
+# exists("all_var_summary"), but all_var_summary was only assembled in the
+# export section AFTER this block, so on a fresh session the guard was always
+# FALSE and aim2a3_model_consistency was never written at any site (dead code).
+# Assemble the binary GLMM profiling results here, before the multinomial fit;
+# the export section rebuilds the same objects later, unchanged.
+all_results_pre = c(full_results, lst_results, icu_results, oneadm_results)
+all_var_summary = rbindlist(
+  Filter(Negate(is.null), lapply(all_results_pre, \(r) r$var_summary)), fill = TRUE)
+all_hosp_profile = rbindlist(
+  Filter(Negate(is.null), lapply(all_results_pre, \(r) r$hosp_profile)), fill = TRUE)
+rm(all_results_pre)
+
+mn_fitted          = FALSE
+mn_error           = NA_character_
+mn_model_type      = "none"
+mn_fallback_reason = NA_character_
 mn_ok = requireNamespace("mclogit", quietly = TRUE)
 
-if (mn_ok) {
+if (!isTRUE(run_multinomial)) {
+  # Package A: skipped by switch, not failed — the status file says so
+  mn_model_type      = "disabled"
+  mn_fallback_reason = "disabled by run_multinomial switch (Package A reduction)"
+  message("  DISABLED by run_multinomial = FALSE (recorded in aim2a3_run_config and aim2_multinomial_status).")
+} else if (mn_ok) {
   library(mclogit)
-  
+
   mn_dt = model_base[outcome_category %in% c("routine_discharge", outcomes_to_model)]
+
+  # change 1: the routine discharge category is sampled the same way as the
+  # binary reference groups. Intercepts are then on the sampled scale
+  # (true = sampled + log(f)); the standardized composition is reweighted back
+  # to population scale below (routine column / f, renormalize).
+  mn_routine = mn_dt[outcome_category == "routine_discharge"]
+  mn_events  = mn_dt[outcome_category != "routine_discharge"]
+  ss_mn = subsample_controls(mn_routine, nrow(mn_events))
+  if (ss_mn$sampled) {
+    message(sprintf("  Multinomial: routine discharge subsampled %s -> %s (f = %.5f).",
+                    format(nrow(mn_routine), big.mark = ","),
+                    format(ss_mn$n_used, big.mark = ","), ss_mn$fraction))
+    mn_dt = rbind(ss_mn$ref, mn_events)
+  }
+  rm(mn_routine, mn_events)
+
   mn_dt[, outcome_mn := relevel(factor(outcome_category), ref = "routine_discharge")]
-  
+
   message(sprintf("  Multinomial: %s encounters, %d hospitals, %d outcome levels.",
                   format(nrow(mn_dt), big.mark = ","),
                   uniqueN(mn_dt$hospital_unit), nlevels(mn_dt$outcome_mn)))
-  
-  mn_formula = as.formula(paste("outcome_mn ~", base_rhs))
-  
+
+  # BUGFIX 2026.08.27 (fifth): a CONSTANT design column is fatal to mblogit —
+  # the random effects fit dies with "'a' is computationally singular,
+  # rcond(a)=0" and the fixed fit with "no valid set of coefficients has been
+  # found: please supply starting values" (both reproduced empirically).
+  # glm/glmer silently DROP aliased columns, so the binary fits never noticed;
+  # mblogit does not. The known offender is apache2_missing, constant 0
+  # wherever the site has no missing APACHE scores (OHSU: 0% missing at both
+  # hospitals; the binary fits show "dropped apache2_missing"), which is what
+  # killed the multinomial at OHSU and on the same evidence most likely at
+  # UMN. Keep only terms that vary in the multinomial analytic data, then
+  # verify the remaining design is full rank on a sample.
+  mn_terms = strsplit(base_rhs, "\\s*\\+\\s*")[[1]]
+  mn_keep = vapply(mn_terms, \(tm) {
+    if (!tm %in% names(mn_dt)) return(TRUE)
+    uniqueN(mn_dt[[tm]][!is.na(mn_dt[[tm]])]) >= 2L
+  }, logical(1))
+  if (any(!mn_keep))
+    message(sprintf("  Multinomial: dropping constant term(s) from the design: %s",
+                    paste(mn_terms[!mn_keep], collapse = ", ")))
+  mn_rhs = paste(mn_terms[mn_keep], collapse = " + ")
+  mn_formula = as.formula(paste("outcome_mn ~", mn_rhs))
+
+  # rank diagnostic on a sample (a rare level absent from the sample can flag
+  # falsely, so this warns rather than stops)
+  mn_rank_ok = tryCatch({
+    Xs = model.matrix(as.formula(paste("~", mn_rhs)),
+                      mn_dt[sample(.N, min(.N, 200000L))])
+    qr(Xs)$rank == ncol(Xs)
+  }, error = function(e) TRUE)
+  if (!isTRUE(mn_rank_ok))
+    message("  WARNING: multinomial design may still be rank deficient (aliased factor level?); mblogit can fail on this.")
+
   # Random structure mirrors the binary GLMMs (system term where a site spans
   # multiple systems; patient term is NOT added -- mblogit cannot carry hundreds
   # of thousands of patient levels, and within-patient dependence is handled by
@@ -1616,28 +2084,76 @@ if (mn_ok) {
   message(sprintf("  Multinomial random effects: %s",
                   paste(vapply(if (is.list(mn_random)) mn_random else list(mn_random),
                                \(f) deparse(f[[2]]), character(1)), collapse = " + ")))
-  
-  mn_fit = tryCatch(
-    mblogit(mn_formula, data = mn_dt, random = mn_random,
-            control = mmclogit.control(maxit = 100)),
-    error = function(e) { message("  Multinomial failed: ", e$message); NULL }
-  )
-  
+
+  # ADDED 2026.08.27: fixed effects fallback, mirroring the binary GLMM
+  # convention. Below the 3 hospital floor the random effect inner solve is
+  # singular (observed at OHSU, 2 units: "'a' is computationally singular"),
+  # so the random effects fit is not attempted; and any random effects error
+  # falls back the same way. The fallback still delivers the protocol 3.6.2
+  # coefficients (model_type = multinomial_fixed); the risk standardized
+  # composition and the consistency checks are skipped because both need
+  # hospital random effects. As with the binary fixed_only fits, fallback SEs
+  # do not account for within hospital correlation.
+  mn_hosp_n      = mn_dt[, uniqueN(hospital_unit)]
+  mn_hosp_events = mn_dt[outcome_category != "routine_discharge", uniqueN(hospital_unit)]
+  mn_use_re      = mn_hosp_n >= 3 && mn_hosp_events >= 2
+
+  t_fit_mn = Sys.time()
+  mn_fit = NULL
+  if (mn_use_re) {
+    mn_fit = tryCatch(
+      mblogit(mn_formula, data = mn_dt, random = mn_random,
+              control = mmclogit.control(maxit = 100)),
+      error = function(e) {
+        mn_error <<- conditionMessage(e)
+        message("  Multinomial (random effects) failed: ", e$message)
+        NULL
+      }
+    )
+    if (is.null(mn_fit))
+      mn_fallback_reason = paste("random effects fit failed:", mn_error)
+  } else {
+    mn_fallback_reason = sprintf(
+      "below hospital floor (%d units, %d with events); random effect not estimable",
+      mn_hosp_n, mn_hosp_events)
+    message(sprintf("  Multinomial: %s -> fixed effects fallback.", mn_fallback_reason))
+  }
+
   if (!is.null(mn_fit)) {
+    mn_fitted = TRUE
+    mn_model_type = "multinomial_glmm"
+    record_timing("multinomial", "all_dispositions", "full_cohort",
+                  nrow(mn_dt), nrow(mn_dt[outcome_category != "routine_discharge"]),
+                  t_fit_mn)
     mn_coefs = as.data.table(summary(mn_fit)$coefficients, keep.rownames = "term")
     setnames(mn_coefs, 1:5, c("term", "estimate", "se", "z_value", "p_value"))
     mn_coefs[, `:=`(
       or       = round(exp(estimate), 3),
       ci_lower = round(exp(estimate - 1.96 * se), 3),
       ci_upper = round(exp(estimate + 1.96 * se), 3),
-      model_type = "multinomial_mblogit", site = site_lowercase
+      model_type = "multinomial_mblogit", site = site_lowercase,
+      # change 1: intercept rows are on the sampled scale when subsampled
+      # (population intercept = sampled + log(control_fraction))
+      control_sampled  = ss_mn$sampled,
+      control_fraction = round(ss_mn$fraction, 6),
+      n_reference_used = ss_mn$n_used
     )]
-    
-    mn_vc = tryCatch(VarCov(mn_fit), error = function(e) NULL)
+
+    # BUGFIX 2026.08.27: current mclogit (0.9.x) no longer exports a VarCov()
+    # function; the random effect covariance lives on the fit object as
+    # mn_fit$VarCov (a list by grouping factor). The old call errored with
+    # "could not find function", the tryCatch turned that into NULL, and
+    # aim2_multinomial_icc plus the consistency checks silently skipped even
+    # when the multinomial fitted. Use the component directly, falling back to
+    # the function for older mclogit versions.
+    mn_vc = mn_fit$VarCov
+    if (is.null(mn_vc))
+      mn_vc = tryCatch(VarCov(mn_fit), error = function(e) NULL)
     if (!is.null(mn_vc)) {
       mn_icc = rbindlist(lapply(seq_along(diag(mn_vc[[1]])), \(i) {
         s2 = diag(mn_vc[[1]])[i]
-        data.table(outcome = names(diag(mn_vc[[1]]))[i],
+        # dimnames carry a "~1" suffix (e.g. "in_hospital_death_acute~1")
+        data.table(outcome = sub("~.*$", "", names(diag(mn_vc[[1]]))[i]),
                    sigma2_hospital = round(s2, 4),
                    icc = round(s2 / (s2 + pi^2/3), 4),
                    model_type = "multinomial_mblogit", site = site_lowercase)
@@ -1645,11 +2161,11 @@ if (mn_ok) {
       fwrite(mn_icc, shareable_path(
         paste0("aim2_multinomial_icc_", site_lowercase, "_", today, ".csv")))
     }
-    
+
     fwrite(mn_coefs, shareable_path(
       paste0("aim2_multinomial_coefficients_", site_lowercase, "_", today, ".csv")))
     message("  Saved multinomial model results.")
-    
+
     # -- Risk-standardized disposition composition (protocol 2A.3, Option C) -----
     # For each hospital, predict the full disposition distribution for a COMMON
     # standardized patient population (the same rows for every hospital), then
@@ -1665,22 +2181,31 @@ if (mn_ok) {
       else if (nrow(mn_dt) > std_n) mn_dt[sample(.N, std_n)] else copy(mn_dt)
       hosp_ids = mn_dt[, sort(unique(hospital_unit))]
       lvls = levels(mn_dt$outcome_mn)
-      
+
       comp = rbindlist(lapply(hosp_ids, \(h) {
         nd = copy(std_dt); nd[, hospital_unit := h]
         # mblogit predict returns an N x (#categories) matrix of probabilities
         pr = predict(mn_fit, newdata = nd, type = "response")
         pr = matrix(pr, ncol = length(lvls), dimnames = list(NULL, lvls))
+        # change 1: predictions are on the sampled scale when the routine
+        # category was subsampled; scale routine back up by 1/f and renormalize
+        # so the composition is population scale and still sums to 1.
+        if (ss_mn$sampled) {
+          pr[, "routine_discharge"] = pr[, "routine_discharge"] / ss_mn$fraction
+          pr = pr / rowSums(pr)
+        }
         data.table(hospital_unit = h, disposition = lvls,
                    rs_probability = round(colMeans(pr), 5))
       }))
       comp[, `:=`(site = site_lowercase, model = "multinomial",
                   standardization = if (exists("standardization_source")) standardization_source else "site_local",
                   standard_pop_version = standard_pop_version,
-                  n_standardization = nrow(std_dt))]
+                  n_standardization = nrow(std_dt),
+                  control_sampled = ss_mn$sampled,
+                  control_fraction = round(ss_mn$fraction, 6))]
       comp
     }, error = \(e) { message("  Multinomial standardization failed: ", e$message); NULL })
-    
+
     if (!is.null(mn_composition)) {
       # QC: every hospital's standardized composition must sum to ~1
       sums = mn_composition[, .(tot = sum(rs_probability)), by = hospital_unit]
@@ -1695,21 +2220,28 @@ if (mn_ok) {
         paste0("aim2a3_rs_composition_", site_lowercase, "_", today, ".csv")))
       message("  Saved aim2a3_rs_composition (risk-standardized disposition composition).")
     }
-    
+
     # -- Option C consistency checks (protocol 2A.3 design) ---------------------
     # The multinomial and the binary GLMMs estimate the SAME contrasts (both use
     # routine_discharge as reference), so they should agree. These run only where
     # the binary GLMMs also fitted, i.e. multi-hospital sites; at a single- or
     # two-hospital site neither model fits and the block is silently skipped.
-    if (exists("all_var_summary") && nrow(all_var_summary) > 0 && !is.null(mn_vc)) {
-      
+    # BUGFIX 2026.08.27: guard formerly required exists("all_var_summary"),
+    # which was never true here on a fresh run (assembled only in the export
+    # section); it is now built above, before this block. The binary
+    # comparators are restricted to the full cohort spec, which is what the
+    # multinomial is fit on (the old unfiltered merge would have duplicated
+    # rows across subgroups).
+    if (nrow(all_var_summary) > 0 && !is.null(mn_vc)) {
+
       # Check 1: sigma^2 ordering. mblogit is PQL (biased downward); lme4 is
       # Laplace. So for each disposition the multinomial sigma^2 should be <= the
       # binary sigma^2. A multinomial value LARGER than the binary one contradicts
       # the expected PQL bias and points to a convergence problem, not a finding.
       mn_s2 = data.table(outcome = sub("~.*$", "", names(diag(mn_vc[[1]]))),
                          sigma2_multinomial = round(diag(mn_vc[[1]]), 4))
-      chk = merge(all_var_summary[, .(outcome, sigma2_binary = sigma2_hospital)],
+      chk = merge(all_var_summary[subgroup == "full_cohort",
+                                  .(outcome, sigma2_binary = sigma2_hospital)],
                   mn_s2, by = "outcome")
       if (nrow(chk)) {
         chk[, sigma2_ordering_ok := sigma2_multinomial <= sigma2_binary * 1.05]
@@ -1719,7 +2251,7 @@ if (mn_ok) {
                           if (chk$sigma2_ordering_ok[i]) "OK"
                           else "** multinomial > binary: check convergence **"))
       }
-      
+
       # Check 2: hospital random effects should correlate across the two models
       # for each disposition. Best-effort -- mblogit's random-effect storage is
       # version-dependent, so a failure here degrades to a message, not an error.
@@ -1727,14 +2259,19 @@ if (mn_ok) {
       tryCatch({
         re_mn = mn_fit$random.effects
         re_mn = if (is.list(re_mn)) as.matrix(re_mn[[1]]) else as.matrix(re_mn)
-        hosp_lv = levels(mn_dt$hospital_unit)
+        # hospital_unit is character in this pipeline; levels() on a character
+        # vector is NULL, which made this check bail with "unexpected RE shape".
+        # Use sorted unique values, matching mblogit's internal factor coding.
+        hosp_lv = if (is.factor(mn_dt$hospital_unit)) levels(mn_dt$hospital_unit)
+                  else sort(unique(mn_dt$hospital_unit))
         cats    = setdiff(levels(mn_dt$outcome_mn), "routine_discharge")
         if (nrow(re_mn) == length(hosp_lv) * length(cats)) {
           # rows are stacked hospital-within-category
           bl = data.table(hospital_unit = rep(hosp_lv, times = length(cats)),
                           outcome        = rep(cats, each = length(hosp_lv)),
                           blup_mn        = as.numeric(re_mn))
-          bin = all_hosp_profile[, .(hospital_unit, outcome, blup_bin = ranef_intercept)]
+          bin = all_hosp_profile[subgroup == "full_cohort",
+                                 .(hospital_unit, outcome, blup_bin = ranef_intercept)]
           j = merge(bl, bin, by = c("hospital_unit", "outcome"))
           cors = j[, .(r = if (.N >= 3) cor(blup_mn, blup_bin) else NA_real_), by = outcome]
           chk[cors, on = "outcome", ranef_correlation := round(i.r, 3)]
@@ -1747,19 +2284,71 @@ if (mn_ok) {
           message("    [consistency] ranef correlation skipped (unexpected mblogit RE shape).")
         }
       }, error = \(e) message("    [consistency] ranef correlation unavailable: ", conditionMessage(e)))
-      
+
       chk[, `:=`(site = site_lowercase, model_spec = "primary")]
       fwrite(chk, shareable_path(
         paste0("aim2a3_model_consistency_", site_lowercase, "_", today, ".csv")))
       message("  Saved aim2a3_model_consistency (multinomial vs binary GLMM agreement).")
     }
-    
+
     rm(mn_dt, mn_fit, mn_coefs)
     suppressWarnings(rm(mn_vc, mn_icc, mn_composition))
+  }
+
+  # fixed effects multinomial fallback (see the fallback design note above)
+  if (mn_model_type == "none") {
+    message("  Fitting fixed effects multinomial fallback (no hospital random effect)...")
+    t_fit_mnf = Sys.time()
+    mn_fit_fixed = tryCatch(
+      mblogit(mn_formula, data = mn_dt, control = mclogit.control(maxit = 100)),
+      error = function(e) {
+        mn_error <<- conditionMessage(e)
+        message("  Fixed effects multinomial also failed: ", e$message)
+        NULL
+      }
+    )
+    if (!is.null(mn_fit_fixed)) {
+      mn_fitted     = TRUE
+      mn_model_type = "multinomial_fixed"
+      record_timing("multinomial_fixed", "all_dispositions", "full_cohort",
+                    nrow(mn_dt),
+                    nrow(mn_dt[outcome_category != "routine_discharge"]),
+                    t_fit_mnf)
+      mn_coefs = as.data.table(summary(mn_fit_fixed)$coefficients, keep.rownames = "term")
+      setnames(mn_coefs, 1:5, c("term", "estimate", "se", "z_value", "p_value"))
+      mn_coefs[, `:=`(
+        or       = round(exp(estimate), 3),
+        ci_lower = round(exp(estimate - 1.96 * se), 3),
+        ci_upper = round(exp(estimate + 1.96 * se), 3),
+        model_type = "multinomial_fixed", site = site_lowercase,
+        control_sampled  = ss_mn$sampled,
+        control_fraction = round(ss_mn$fraction, 6),
+        n_reference_used = ss_mn$n_used
+      )]
+      fwrite(mn_coefs, shareable_path(
+        paste0("aim2_multinomial_coefficients_", site_lowercase, "_", today, ".csv")))
+      message("  Saved multinomial coefficients (fixed effects fallback).")
+      message("  RS composition and consistency checks skipped: both need hospital random effects.")
+      rm(mn_coefs, mn_fit_fixed)
+    }
+    suppressWarnings(rm(mn_dt))
   }
 } else {
   message("  mclogit not available — multinomial model skipped.")
 }
+
+# ADDED 2026.08.27: always record whether the multinomial fitted, so a missing
+# coefficient file in a site's shareable bundle is diagnosable at the
+# coordinating center rather than only from that site's console log.
+fwrite(data.table(site               = site_lowercase,
+                  mclogit_available  = mn_ok,
+                  multinomial_fitted = isTRUE(mn_fitted),
+                  model_type         = mn_model_type,
+                  fallback_reason    = fifelse(is.na(mn_fallback_reason), "", mn_fallback_reason),
+                  error              = fifelse(is.na(mn_error), "", mn_error)),
+       shareable_path(paste0("aim2_multinomial_status_", site_lowercase, "_", today, ".csv")))
+message(sprintf("  Saved aim2_multinomial_status (fitted = %s, model_type = %s).",
+                isTRUE(mn_fitted), mn_model_type))
 
 
 # =============================================================================
@@ -1775,23 +2364,68 @@ message("\n--- Analysis 2.5: ICC over pandemic eras ---")
 era_levels = levels(model_base$pandemic_period)
 era_outcomes = c("in_hospital_death_acute", "same_facility_hospice_death")
 
-icc_over_time = rbindlist(lapply(era_levels, \(era) {
-  era_dt = model_base[pandemic_period == era]
+# BUGFIX 2026.08.27 (era refits silently produced no output):
+#   (a) formula_glmm carries pandemic_period as a fixed effect. Within a single
+#       era it has one observed level; model.frame drops unused factor levels,
+#       so glmer stopped with "contrasts can be applied only to factors with 2
+#       or more levels" on EVERY era fit, the tryCatch swallowed it, and both
+#       era files were skipped without a trace. The RHS is now rebuilt per era,
+#       keeping only terms that still vary in that era's analytic data (this
+#       also guards any other covariate that collapses within an era).
+#   (b) the old collection pattern returned list(summary=, ranef=) through
+#       nested rbindlist(), which errors on mixed column counts the moment a
+#       fit succeeds ("Column 2 of item 1 is length 4 inconsistent..."), and
+#       would then have crashed the whole script. Summary and ranef rows are
+#       now collected in separate lists.
+#   Era fit failures are also now reported loudly instead of returning NULL
+#   silently.
+
+era_summary_list = list()
+era_ranef_list   = list()
+
+if (!isTRUE(run_era_models)) {
+  message("  DISABLED by run_era_models = FALSE (recorded in aim2a3_run_config).")
+} else for (era in era_levels) {
+  era_dt  = model_base[pandemic_period == era]
   era_ref = era_dt[outcome_category == "routine_discharge"]
   if (nrow(era_dt) < 100 || nrow(era_ref) < 50 || uniqueN(era_dt$hospital_unit) < 3) {
     message(sprintf("    %s: too small — skipping.", era))
-    return(NULL)
+    next
   }
-  rbindlist(lapply(era_outcomes, \(out) {
+  for (out in era_outcomes) {
     od = era_dt[outcome_category == out]
-    if (nrow(od) < 20) return(NULL)
-    md = rbind(era_ref, od)
+    if (nrow(od) < 20) {
+      message(sprintf("    %s / %s: only %d events — skipping.", era, out, nrow(od)))
+      next
+    }
+    # change 1: era refits use the same control subsampling (sigma^2 only is
+    # reported from these fits, so no offset correction is needed)
+    ss_era = subsample_controls(era_ref, nrow(od))
+    if (ss_era$sampled)
+      message(sprintf("    %s / %s: era reference subsampled to %s controls (f = %.5f).",
+                      era, out, format(ss_era$n_used, big.mark = ","), ss_era$fraction))
+    md = rbind(ss_era$ref, od)
     md[, y := fifelse(outcome_category == out, 1L, 0L)]
-    tryCatch({
-      fit = glmer(formula_glmm, data = md, family = binomial, nAGQ = 1,
+
+    # keep only fixed effect terms that still vary within this era's data
+    era_terms = strsplit(base_rhs, "\\s*\\+\\s*")[[1]]
+    keep = vapply(era_terms, \(tm) {
+      if (!tm %in% names(md)) return(TRUE)
+      uniqueN(md[[tm]][!is.na(md[[tm]])]) >= 2L
+    }, logical(1))
+    if (any(!keep))
+      message(sprintf("    %s / %s: dropping constant term(s): %s",
+                      era, out, paste(era_terms[!keep], collapse = ", ")))
+    f_era = as.formula(paste("y ~", paste(era_terms[keep], collapse = " + "),
+                             "+", re_rhs))
+
+    res = tryCatch({
+      t_fit = Sys.time()
+      fit = glmer(f_era, data = md, family = binomial, nAGQ = 1,
                   control = glmerControl(optimizer = "bobyqa",
                                          optCtrl = list(maxfun = 30000),
                                          calc.derivs = FALSE))
+      record_timing("era_glmm", out, era, nrow(md), nrow(od), t_fit)
       s2 = as.data.table(VarCorr(fit))[grp == "hospital_unit", vcov]
       re = ranef(fit)$hospital_unit
       list(summary = data.table(pandemic_period = era, outcome = out,
@@ -1799,15 +2433,23 @@ icc_over_time = rbindlist(lapply(era_levels, \(era) {
                                 n_hospitals = uniqueN(md$hospital_unit), site = site_lowercase),
            ranef = data.table(hospital_unit = rownames(re),
                               ranef_intercept = re[,1], era = era, outcome = out))
-    }, error = function(e) NULL)
-  }), fill = TRUE)
-}), fill = TRUE)
+    }, error = function(e) {
+      message(sprintf("    %s / %s: era GLMM failed: %s", era, out, conditionMessage(e)))
+      NULL
+    })
+    if (!is.null(res)) {
+      key = paste(era, out, sep = "|")
+      era_summary_list[[key]] = res$summary
+      era_ranef_list[[key]]   = res$ranef
+    }
+  }
+}
 
-# icc_over_time currently holds nested lists; separate summary and ranef
-if (length(icc_over_time) > 0 && nrow(icc_over_time) > 0) {
-  icc_summary = rbindlist(lapply(icc_over_time$summary, identity), fill = TRUE)
-  icc_ranef   = rbindlist(lapply(icc_over_time$ranef, identity), fill = TRUE)
-  
+icc_summary = rbindlist(era_summary_list, fill = TRUE)
+icc_ranef   = rbindlist(era_ranef_list,   fill = TRUE)
+
+if (nrow(icc_summary) > 0) {
+
   if (!is.null(icc_summary) && nrow(icc_summary) > 0) {
     message("  ICC by era:")
     for (i in seq_len(nrow(icc_summary)))
@@ -1817,7 +2459,7 @@ if (length(icc_over_time) > 0 && nrow(icc_over_time) > 0) {
     fwrite(icc_summary, shareable_path(
       paste0("aim2_icc_over_time_", site_lowercase, "_", today, ".csv")))
   }
-  
+
   # Spearman correlation of hospital random intercepts across eras
   if (!is.null(icc_ranef) && nrow(icc_ranef) > 0) {
     spear_rows = rbindlist(lapply(era_outcomes, \(out) {
@@ -1932,13 +2574,19 @@ message("  Saved aim2a3_model_coefficients.")
 course_coefs = rbindlist(lapply(course_results, \(r) r$coefficients), fill = TRUE)
 course_icc   = rbindlist(lapply(course_results, \(r) r$icc),          fill = TRUE)
 if (nrow(course_coefs)) {
-  course_coefs[, model_spec := "clinical_course"]
+  # change 3: carry the window and any fallback so the coordinating center can
+  # see which sites ran windowed vs whole stay exposures
+  course_coefs[, `:=`(model_spec = "clinical_course",
+                      course_window_hours = course_window_hours,
+                      course_flag_provenance = course_flag_provenance)]
   fwrite(course_coefs, shareable_path(
     paste0("aim2a3_model_coefficients_clinical_course_", site_lowercase, "_", today, ".csv")))
   message("  Saved aim2a3_model_coefficients_clinical_course (secondary estimand).")
 }
 if (nrow(course_icc)) {
-  course_icc[, model_spec := "clinical_course"]
+  course_icc[, `:=`(model_spec = "clinical_course",
+                    course_window_hours = course_window_hours,
+                    course_flag_provenance = course_flag_provenance)]
   fwrite(course_icc, shareable_path(
     paste0("aim2a3_icc_clinical_course_", site_lowercase, "_", today, ".csv")))
 }
@@ -1984,6 +2632,25 @@ if (nrow(all_ranef) > 0) {
   message("  Saved aim2a3_hospital_ranef.")
 }
 
+# change 2: per model timing (always on) — one row per completed fit
+if (length(fit_timings) > 0) {
+  timing_dt = rbindlist(fit_timings, fill = TRUE)
+  timing_dt[, site := site_lowercase]
+  setcolorder(timing_dt, c("site", "stage", "outcome", "subgroup",
+                           "rows", "events", "minutes"))
+  fwrite(timing_dt, shareable_path(
+    paste0("aim2a3_timing_", site_lowercase, "_", today, ".csv")))
+  message("  Saved aim2a3_timing.")
+
+  top = timing_dt[order(-minutes)][seq_len(min(5L, .N))]
+  message("\n  Five slowest fits:")
+  for (i in seq_len(nrow(top)))
+    message(sprintf("    %-25s %-30s %-25s %8.1f min (%s rows, %s events)",
+                    top$stage[i], top$outcome[i], top$subgroup[i], top$minutes[i],
+                    format(top$rows[i], big.mark = ","),
+                    format(top$events[i], big.mark = ",")))
+}
+
 
 # 6. save intermediate covariate file ------------------------------------------
 
@@ -1993,7 +2660,9 @@ covariate_cols = c(
   "elixhauser_vw", "elixhauser_count",
   "dx_category", "ccsr_category",
   "apache2_score", "apache2_complete", "apache2_imputed", "apache2_missing",
-  "race_eth"
+  "race_eth",
+  # change 3: the four early flag columns, so 05 and others can reuse them
+  "icu_early_flag", "lst_early_flag", "imv_early_flag", "vaso_early_flag"
 )
 covariate_cols = intersect(covariate_cols, names(cohort))
 
@@ -2018,8 +2687,11 @@ suppressWarnings(rm(all_var_summary, all_hosp_profile,
                     course_results, course_coefs, course_icc,
                     formula_fixed_course, formula_glmm_course, course_rhs))
 
-suppressWarnings(rm(icc_over_time, era_levels, era_outcomes,
-                    hosp_rates, var_stats, n_hospice_unit_hosp, mn_ok))
+suppressWarnings(rm(era_summary_list, era_ranef_list, era_levels, era_outcomes,
+                    hosp_rates, var_stats, n_hospice_unit_hosp,
+                    mn_ok, mn_fitted, mn_error, mn_model_type, mn_fallback_reason,
+                    mn_use_re, mn_hosp_n, mn_hosp_events,
+                    all_var_summary, all_hosp_profile))
 
 gc()
 

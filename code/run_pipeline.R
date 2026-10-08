@@ -14,6 +14,10 @@
 #   Rscript code/run_pipeline.R --only 01,04   # run only these stages
 #   Rscript code/run_pipeline.R --keep-going   # continue past a failing stage
 #   Rscript code/run_pipeline.R --list         # list stages and exit
+#
+# Run it with Rscript from a shell, as above. If it is sourced in an interactive
+# R session instead, it still runs every stage and prints the summary, but it
+# does not quit R at the end (flags are only read from the Rscript command line).
 # =============================================================================
 
 if (!requireNamespace("rprojroot", quietly = TRUE))
@@ -123,7 +127,12 @@ if (ok_write) cat(sprintf("\nTiming log: %s\n", tl))
 
 if (failed) {
   cat("\nPipeline FAILED. Fix the failing stage and re-run with --from <stage>.\n")
-  quit(save = "no", status = 1)
+} else {
+  cat("\nPipeline completed successfully.\n")
 }
-cat("\nPipeline completed successfully.\n")
-quit(save = "no", status = 0)
+
+# Set the process exit code only when run via Rscript. When this file is sourced
+# in an interactive session (RStudio, the VS Code R terminal), quit() would end
+# that whole session and close its terminal, which looks like a crash; leave the
+# session alive there so the timing summary stays on screen.
+if (!interactive()) quit(save = "no", status = if (failed) 1 else 0)
