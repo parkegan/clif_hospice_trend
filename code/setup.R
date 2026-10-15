@@ -13,6 +13,19 @@
 #
 # After this finishes, run the pipeline with:
 #     Rscript code/run_pipeline.R
+#
+# Updated 2026.10.09 (buddy site feedback, restricted install environments):
+#   * The package list is now READ FROM code/_dependencies.R at run time and
+#     unioned with the fallback list below, so the two manifests can never
+#     drift apart. Sites building environments by hand (conda, offline
+#     mirrors) can treat either file as the complete list.
+#   * Added a system time zone database check. tzdata is an OS level
+#     dependency, not an R package: minimal containers and bare conda
+#     environments can lack it, and every datetime operation with a named
+#     zone (America/Chicago, America/Los_Angeles, ...) then fails. R cannot
+#     install it; the check below tells you what to install if it is missing
+#     (conda: `conda install tzdata`; Debian/Ubuntu: `apt-get install tzdata`;
+#     RHEL/Rocky: `dnf install tzdata`).
 # =============================================================================
 
 options(repos = c(CRAN = "https://cloud.r-project.org"),
@@ -21,44 +34,54 @@ options(repos = c(CRAN = "https://cloud.r-project.org"),
 # an anchor file so here::here() resolves to this directory (the project root)
 if (!file.exists(".here")) file.create(".here")
 
+# --- system time zone database check (tzdata; see header note) ---------------
+tz_ok <- tryCatch({
+  tzs <- OlsonNames()
+  length(tzs) > 0 && "America/Chicago" %in% tzs
+}, error = function(e) FALSE)
+if (!tz_ok) {
+  message("WARNING: the system time zone database (tzdata) is missing or ",
+          "incomplete.\n  Datetime handling with named zones will fail at ",
+          "runtime. Install it at the SYSTEM level before running the ",
+          "pipeline:\n    conda:         conda install tzdata\n",
+          "    Debian/Ubuntu: apt-get install tzdata\n",
+          "    RHEL/Rocky:    dnf install tzdata")
+}
+
 if (!requireNamespace("renv", quietly = TRUE)) {
   message("Installing renv ...")
   install.packages("renv")
 }
 
+# Fallback package list. The authoritative manifest is code/_dependencies.R;
+# the block below scans it and unions the result with this list, so adding a
+# package there is enough — this vector only matters if that file is absent.
 pkgs <- c(
   "arrow", "cmprsk", "collapse", "comorbidity", "data.table", "dplyr", "fst",
   "ggplot2", "here", "lme4", "lubridate", "mclogit", "patchwork", "ps", "rlang",
   "rprojroot", "scales", "stringr", "survival", "yaml"
 )
 
+dep_file <- file.path("code", "_dependencies.R")
+if (file.exists(dep_file)) {
+  dep_lines <- readLines(dep_file, warn = FALSE)
+  hits      <- regmatches(dep_lines,
+                          regexpr("^\\s*library\\([A-Za-z0-9._]+\\)", dep_lines))
+  scanned   <- gsub("^\\s*library\\(|\\)$", "", hits)
+  extra     <- setdiff(scanned, pkgs)
+  if (length(extra))
+    message("Packages found in code/_dependencies.R beyond the fallback list: ",
+            paste(extra, collapse = ", "))
+  pkgs <- sort(union(pkgs, scanned))
+} else {
+  message("NOTE: code/_dependencies.R not found — using the fallback package ",
+          "list in this script. Run setup.R from the project root.")
+}
+message("Package set (", length(pkgs), "): ", paste(pkgs, collapse = ", "))
+
 if (file.exists("renv.lock")) {
-
-  # Report the R version the lockfile targets vs the one running here. A mismatch
-  # is the usual reason restore() struggles: CRAN may have no BINARY of a pinned
-  # package version for a newer R, so renv tries to compile from source and can
-  # fail. We therefore attempt restore(), then FILL ANY GAPS with versions that
-  # are compatible with the R actually running -- so a newer (or older) R still
-  # ends up with a working library. The shared renv.lock is left untouched.
-  lock_r <- tryCatch(renv::lockfile_read("renv.lock")$R$Version, error = function(e) NA_character_)
-  if (!is.na(lock_r) && lock_r != as.character(getRversion()))
-    message(sprintf("Note: renv.lock targets R %s; you are running R %s. Any packages\n",
-                    lock_r, getRversion()),
-            "  whose pinned build is unavailable for your R will be replaced with a\n",
-            "  compatible version (results are not expected to change).")
-
-  message("Restoring recorded package versions from renv.lock ...")
-  tryCatch(renv::restore(prompt = FALSE),
-           error = function(e) message("  restore() reported: ", conditionMessage(e)))
-
-  # anything the lock could not supply for THIS R -> install a compatible version
-  gaps <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
-  if (length(gaps)) {
-    message("Filling ", length(gaps), " package(s) the lockfile could not supply on this R:\n  ",
-            paste(gaps, collapse = ", "))
-    renv::install(gaps)     # newest version that builds on the current R
-  }
-
+  message("renv.lock found -> restoring recorded package versions ...")
+  renv::restore(prompt = FALSE)
 } else {
   message("No renv.lock -> initialising a fresh renv library ...")
   renv::init(bare = TRUE, restart = FALSE)

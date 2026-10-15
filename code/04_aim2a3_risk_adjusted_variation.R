@@ -10,25 +10,41 @@
 # Approach (2A.3):
 #   The protocol specifies a mixed-effects multinomial logistic regression with
 #   hospital random intercepts. We implement this as a set of separate binary
-#   GLMMs (lme4::glmer), each outcome vs. routine_discharge, and fit the
-#   multinomial (mclogit) alongside as a consistency check. See
-#   aim2a3_model_consistency for the agreement diagnostics.
+#   GLMMs (lme4::glmer), each outcome vs. in_hospital_death_acute within the
+#   END OF LIFE cohort, and fit the multinomial (mclogit) alongside as a
+#   consistency check. See aim2a3_model_consistency for the agreement
+#   diagnostics.
 
 # Covariates, primary model (protocol 3.4.4):
 #     - Age (continuous, centered)
 #     - Sex
 #     - Race/ethnicity (collapsed to 5-level)
 #     - Admission diagnosis category (ICD-10 -> CCSR)
-#     - Comorbidity burden (Elixhauser van Walraven index)
+#     - Comorbidity burden (Elixhauser van Walraven index, PRESENT ON ADMISSION
+#       diagnoses only where the site supplies a POA indicator)
 #     - Admission severity (APACHE II, first 24h; plus a missingness indicator)
 #     - Preexisting code status
 #     - Admission source
 #     - Pandemic period
 
+# Analytic unit: ONE admission per patient, the LAST admission in the study
+# period. Each patient appears once, so no model carries a patient term.
+
+# Analytic cohorts (CHANGED 2026.10.14, see section 4):
+#   eol        PRIMARY. End of life cohort: admissions ending in
+#              in_hospital_death_acute, same_facility_hospice (death and alive
+#              collapsed), or external_hospice_discharge. Outcomes are modeled
+#              against in_hospital_death_acute, so each hospital effect is the
+#              adjusted hospice to death ratio on the log odds scale.
+#   full       One admission per patient, all dispositions. Two INCIDENCE fits
+#              only: any hospice and in hospital death, each vs routine_discharge.
+#   terminal   Death linked sites only. Died in hospital or within 30 days of
+#              discharge, any disposition; adds died_30d_no_hospice. Same fits
+#              as eol, plus a concordance table against eol.
+
 # Random effects:
 #     - (1 | hospital_unit)
-#     - (1 | health_system)
-#     - (1 | patient_id)
+#     - (1 | health_system)   only where a site spans 3 or more systems
 
 # Variation reporting: the protocol replaced the ICC with a profiling suite.
 # The headline quantities are sigma^2 with an interval, the median odds ratio,
@@ -44,7 +60,8 @@
 #     - aim2a_unadjusted_variation_{site}.png
 #   2A.3 primary
 #     - aim2a3_analytic_summary_{site}.csv           — covariate distributions
-#     - aim2a3_standardization_margins_{site}.csv    — for pooled-standard assembly
+#     - aim2a3_standardization_margins_{site}.csv    — for pooled-standard assembly (all admissions)
+#     - aim2a3_standardization_margins_eol_{site}.csv — same, END OF LIFE cohort (for the eol standard population)
 #     - aim2a3_model_coefficients_{site}.csv         — fixed effects, binary GLMMs
 #     - aim2a3_variation_summary_{site}.csv          — sigma^2, MOR, p10-p90, reliability
 #     - aim2a3_hospital_profile_{site}.csv           — RS probs, reliability, rank CIs
@@ -52,6 +69,7 @@
 #     - aim2a3_icc_{site}.csv                        — secondary
 #     - aim2a3_rs_composition_{site}.csv             — multinomial composition
 #     - aim2a3_model_consistency_{site}.csv          — binary vs. multinomial agreement
+#     - aim2a3_eol_terminal_concordance_{site}.csv   — death linked sites: eol vs terminal hospital effects
 #   2A.3 secondary (clinical course, separate estimand)
 #     - aim2a3_model_coefficients_clinical_course_{site}.csv
 #     - aim2a3_icc_clinical_course_{site}.csv
@@ -67,7 +85,75 @@
 #     - clinical course outputs now carry course_window_hours + course_flag_provenance
 #     - coefficient CSVs carry control_sampled, control_fraction, n_reference_used
 
-# Last updated bpe 26.10.07: control_subsample_threshold raised from 500,000
+# Last updated bpe 26.10.14 (third change set): Elixhauser from PRESENT ON
+# ADMISSION diagnoses only (section 2a). The POA column is detected by name
+# (poa_present in CLIF 2.1); Y / W / 1 count as present, N / U / 0 as not
+# present and are dropped, exempt or blank values are kept as not stated. The
+# principal diagnosis (2b) is untouched. The restriction's completeness is
+# reported in aim2a3_run_config (five new rows) and a data quality flag fires
+# when the indicator is absent, never populated, or more than half not
+# stated. Preexisting code status is unchanged (admission plus 24 h window).
+#
+# Earlier on 26.10.14 (second change set, research in progress
+# feedback): the PRIMARY variation model moves to the END OF LIFE cohort.
+#   - eol cohort = admissions ending in in_hospital_death_acute,
+#     same_facility_hospice, or external_hospice_discharge; outcomes are
+#     modeled vs in_hospital_death_acute (same_facility_hospice at class (a)
+#     hospitals only; external_hospice_discharge and any_hospice_disposition
+#     everywhere). The hospital effect is the adjusted hospice to death ratio
+#     on the log odds scale, the model version of the 2A.2 ratio. The LST and
+#     ICU subgroups, the clinical course model, the multinomial (class (a)
+#     hospitals, three levels), and the era refits all run inside this cohort.
+#     subgroup labels: eol, eol_lst_any, eol_icu_only, eol_excl_death_48h.
+#   - opportunity sensitivity eol_excl_death_48h drops in hospital deaths
+#     within early_death_window_hours of admission.
+#   - two INCIDENCE fits on the full one admission sample vs routine_discharge
+#     (any_hospice_disposition, in_hospital_death_acute), subgroup
+#     full_cohort_incidence. The only fits that still subsample controls.
+#   - terminal cohort at death linked sites (died in hospital or within
+#     terminal_death_window_days of discharge, any disposition; routine,
+#     transfer and AMA deaths become died_30d_no_hospice), subgroup
+#     terminal_30d, plus aim2a3_eol_terminal_concordance comparing its
+#     hospital effects with eol.
+#   - coefficient, ICC, variation, profile and ranef tables carry a
+#     reference_category column; subgroup = "full_cohort" rows are no longer
+#     produced.
+#   - a second margins file (aim2a3_standardization_margins_eol) and a second
+#     distributed standard population (config/network_standard_population_eol.csv)
+#     for the end of life fits; site local until the coordinating center
+#     distributes it. The all admissions population serves the incidence fits.
+#   - admission_source rare level collapse now computed on the end of life rows.
+#   - run_era_models switched ON (cheap inside the eol cohort).
+#   - fit_family() wraps the model_base / ref_group swap the subgroup blocks
+#     used to repeat by hand.
+#
+# Earlier on 26.10.14, after the research in progress meeting:
+#   1. ONE same facility hospice outcome. same_facility_hospice_death and
+#      same_facility_hospice_alive are collapsed to "same_facility_hospice"
+#      in the modeling sample (model_base, top of section 4). The multinomial
+#      therefore has five disposition categories against routine discharge,
+#      and the per disposition binary GLMMs, the era refits, and the
+#      consistency checks use the same five, so every multinomial category
+#      still has its binary comparator. The split is NOT changed in 01;
+#      2A.1, 2A.2, and the analytic summary still report it, and Aims 1 and
+#      3 are untouched.
+#   2. The patient level random effect is REMOVED entirely: no (1 | patient_id)
+#      term anywhere, no estimability test, no all admissions sensitivity.
+#      One admission per patient (the last) is the only analytic unit. Rows
+#      with subgroup = "all_admissions_patient_re" are no longer produced and
+#      the patient_re_sensitivity row leaves aim2a3_run_config.
+#
+# Previous update bpe 26.10.13: analytic unit changed to one admission per
+# patient, the LAST admission in the study period (before this, all
+# admissions with a patient random intercept where estimable, and a FIRST
+# admission per patient refit as the sensitivity). subgroup = "full_cohort"
+# now means the one admission per patient sample; subgroup =
+# "one_admission_per_patient" rows are no longer produced. 2A.1, 2A.2, the
+# analytic summary, and the standardization margins still describe ALL
+# admissions. aim2a3_run_config carries the admission rule and the encounter
+# and patient counts.
+#
+# Previous update bpe 26.10.07: control_subsample_threshold raised from 500,000
 # to 1,000,000 after review of the first subsampled OHSU run (261007). OHSU
 # (reference 602k) barely crossed the old threshold and took the approximation
 # for a saving it did not need; at 1,000,000 a mid size site runs the exact
@@ -150,15 +236,30 @@ control_subsample_seed      = 20260713L
 
 # Package A reduction (2026.08.28, runtime triage): the multinomial and the
 # era refits are DISABLED as switches, not deletions, so they can be re
-# enabled later without redistributing a different script. Neither has ever
-# produced output at a site to date. The clinical course models are KEPT
-# (Package A retains them; subsampling carries the runtime saving instead).
-# Every run writes aim2a3_run_config_{site}.csv recording these states, so a
-# SKIPPED model family is distinguishable from a FAILED one at the
-# coordinating center.
+# enabled later without redistributing a different script. The clinical
+# course models are KEPT (Package A retains them; subsampling carries the
+# runtime saving instead). Every run writes aim2a3_run_config_{site}.csv
+# recording these states, so a SKIPPED model family is distinguishable from
+# a FAILED one at the coordinating center.
+# run_multinomial RE ENABLED 2026.10.07 at OHSU to exercise the multinomial
+# on the v261007 configuration (fixed fallback below the 3 hospital floor;
+# at OHSU the routine group, 602k, sits under the 1,000,000 threshold, so
+# the multinomial fits UNSAMPLED — expect roughly the ~2 h cost observed on
+# the 260828 run). Era refits remain off.
+# run_era_models switched ON 2026.10.14: the era refits now run inside the
+# end of life cohort (a few percent of admissions), so their cost is minutes.
 run_clinical_course = TRUE
-run_era_models      = FALSE
-run_multinomial     = FALSE
+run_era_models      = TRUE
+run_multinomial     = TRUE
+
+# CHANGED 2026.10.14: end of life cohort definition in the RAW 01 categories
+# (the two same facility categories are collapsed to one in section 4), the
+# opportunity sensitivity window, and the terminal cohort window used at
+# death linked sites. See section 4 for the cohorts themselves.
+eol_categories_raw = c("in_hospital_death_acute", "same_facility_hospice_death",
+                       "same_facility_hospice_alive", "external_hospice_discharge")
+early_death_window_hours   = 48   # drop in hospital deaths this soon after admission (sensitivity)
+terminal_death_window_days = 30   # terminal cohort: death within this many days of discharge
 
 # Change 4 (2026.08.26): EXACT row compression, DEFAULT OFF. Rows identical on
 # every model variable (all.vars of the formula + y, so any random effect
@@ -249,7 +350,7 @@ run_config = data.table(
                         apache2_impute_val),
                    function(x) format(x, scientific = FALSE), character(1))
 )
-run_config[, `:=`(site = site_lowercase, script_version = "04_v261007")]
+run_config[, `:=`(site = site_lowercase, script_version = "04_v261014c")]
 fwrite(run_config, shareable_path(
   paste0("aim2a3_run_config_", site_lowercase, "_", today, ".csv")))
 message(sprintf("Run configuration saved (subsampling %s | clinical course %s | era %s | multinomial %s).",
@@ -321,9 +422,15 @@ dx_flag_cols = grep("primary|principal|priority|rank|sequence|seq|position",
                     names(dx_schema), ignore.case = TRUE, value = TRUE)
 flag_col = if (length(dx_flag_cols)) dx_flag_cols[1] else NA_character_
 
+# CHANGED 2026.10.14: detect the present on admission column the same way
+# (CLIF 2.1 names it poa_present; older extracts vary). It restricts the
+# COMORBIDITY index below; the principal diagnosis in 2b is untouched.
+poa_cols = grep("poa|present_on_admission", names(dx_schema), ignore.case = TRUE, value = TRUE)
+poa_col  = if (length(poa_cols)) poa_cols[1] else NA_character_
+
 dx = data_list[["hospital_diagnosis"]] |>
   dplyr::select(dplyr::all_of(unique(c(
-    "hospitalization_id", "diagnosis_code", "diagnosis_code_format", dx_flag_cols)))) |>
+    "hospitalization_id", "diagnosis_code", "diagnosis_code_format", dx_flag_cols, poa_cols)))) |>
   dplyr::collect() |>
   as.data.table()
 
@@ -348,9 +455,71 @@ message(sprintf("  ICD-10 codes: %s across %s encounters.",
                 format(n_dx, big.mark = ","),
                 format(n_enc_with_dx, big.mark = ",")))
 
+# CHANGED 2026.10.14: comorbidity from PRESENT ON ADMISSION diagnoses only.
+# Discharge diagnoses include conditions acquired during the stay (renal
+# failure, sepsis, delirium), so without this restriction part of the harm
+# being measured enters the expected risk, and the hospital's coding depth
+# becomes part of its case mix. The principal diagnosis (2b) is not
+# restricted: it is the reason for admission by definition and is chosen by
+# the primary flag, not by POA.
+#
+# Value handling follows the AHRQ convention for the CMS indicator: Y / W
+# (clinically undetermined) count as present, N / U (insufficient
+# documentation) as not present, and exempt or blank values are not stated.
+# CLIF ETLs usually deliver a 0/1 poa_present, which maps the same way. A code
+# is DROPPED only when the site explicitly flags it as not present; a code
+# whose POA status is not stated is kept, so a sparsely populated column
+# weakens the restriction rather than discarding comorbidities. The shares
+# are reported here and in aim2a3_run_config so the coordinating center can
+# see how complete each site's restriction was. No column, or a column that
+# is never populated, falls back to all diagnoses with a data quality flag.
+.poa_norm = function(x) {
+  if (is.logical(x)) return(as.integer(x))
+  if (is.numeric(x)) return(fifelse(is.na(x), NA_integer_, as.integer(x != 0)))
+  v = tolower(trimws(as.character(x)))
+  fcase(v %in% c("1", "y", "yes", "true", "t", "w"), 1L,
+        v %in% c("0", "n", "no", "false", "f", "u"), 0L,
+        default = NA_integer_)
+}
+elix_poa_restricted = FALSE
+poa_share = c(present = NA_real_, not_present = NA_real_, not_stated = NA_real_)
+if (!is.na(poa_col) && n_dx > 0) {
+  dx_icd10[, poa_norm := .poa_norm(get(poa_col))]
+  poa_share = c(present     = dx_icd10[poa_norm %in% 1L, .N] / n_dx,
+                not_present = dx_icd10[poa_norm %in% 0L, .N] / n_dx,
+                not_stated  = dx_icd10[is.na(poa_norm), .N] / n_dx)
+  if (poa_share[["not_stated"]] < 1) {
+    elix_poa_restricted = TRUE
+    dx_elix = dx_icd10[is.na(poa_norm) | poa_norm == 1L]
+    message(sprintf("  Elixhauser restricted to present-on-admission codes ('%s'): %.1f%% present, %.1f%% not present (dropped), %.1f%% not stated (kept).",
+                    poa_col, 100 * poa_share[["present"]],
+                    100 * poa_share[["not_present"]], 100 * poa_share[["not_stated"]]))
+    if (poa_share[["not_stated"]] > 0.5)
+      qi_flag("Present-on-admission indicator sparsely populated",
+              sprintf(paste0(
+                "%.1f%% of ICD-10 codes have no POA status ('%s'). Those codes are kept in the\n",
+                "Elixhauser index, so the POA restriction is only partial at this site and the\n",
+                "comorbidity score may still carry in-hospital diagnoses. Review with the data team."),
+                100 * poa_share[["not_stated"]], poa_col))
+  } else {
+    dx_elix = dx_icd10
+    qi_flag("Present-on-admission indicator never populated",
+            sprintf(paste0(
+              "Column '%s' exists but holds no usable value, so the Elixhauser index uses ALL\n",
+              "discharge diagnoses, including conditions acquired during the stay. The site's\n",
+              "comorbidity adjustment is not comparable with POA-restricted sites."), poa_col))
+  }
+} else {
+  dx_elix = dx_icd10
+  qi_flag("No present-on-admission indicator",
+          paste0("hospital_diagnosis has no POA column, so the Elixhauser index uses ALL\n",
+                 "discharge diagnoses, including conditions acquired during the stay. The site's\n",
+                 "comorbidity adjustment is not comparable with POA-restricted sites."))
+}
+
 # compute Elixhauser using the comorbidity package
 elix = comorbidity::comorbidity(
-  x   = dx_icd10[, .(id = hospitalization_id, code = code_clean)],
+  x   = dx_elix[, .(id = hospitalization_id, code = code_clean)],
   id  = "id",
   code = "code",
   map = "elixhauser_icd10_quan",
@@ -375,11 +544,12 @@ cohort = merge(cohort, elix_dt, by = "hospitalization_id", all.x = TRUE)
 cohort[is.na(elixhauser_vw), elixhauser_vw := 0L]
 cohort[is.na(elixhauser_count), elixhauser_count := 0L]
 
-message(sprintf("  Elixhauser: median VW score = %d, mean = %.1f",
+message(sprintf("  Elixhauser (%s): median VW score = %d, mean = %.1f",
+                if (elix_poa_restricted) "POA codes" else "ALL codes",
                 median(cohort$elixhauser_vw),
                 mean(cohort$elixhauser_vw)))
 
-rm(elix, elix_scores, elix_dt, flag_cols_elix)
+rm(elix, elix_scores, elix_dt, flag_cols_elix, dx_elix)
 
 
 ## 2b. Admission diagnosis categories — AHRQ CCSR body system ------------------
@@ -635,7 +805,14 @@ if (!is.na(adm_src_col)) {
   asrc[is.na(admission_source) | !nzchar(admission_source), admission_source := "Unknown"]
   cohort = merge(cohort, asrc, by = "hospitalization_id", all.x = TRUE)
   cohort[is.na(admission_source), admission_source := "Unknown"]
-  keep = cohort[, .N, by = admission_source][N >= 50, admission_source]   # collapse rare
+  # CHANGED 2026.10.14: the rare level floor is applied on the END OF LIFE rows
+  # (the primary modeling sample, a few percent of admissions), not on all
+  # admissions. A level with 50 admissions overall may have one or two among
+  # deaths and hospice discharges, which invites separation in the primary
+  # fits. Levels kept here are kept for every cohort, so the factor is coded
+  # the same way in all fits and in both margins files.
+  keep = cohort[outcome_category %in% eol_categories_raw, .N, by = admission_source
+                ][N >= 50, admission_source]   # collapse rare
   cohort[!admission_source %in% keep, admission_source := "Other"]
   ref_src = names(which.max(table(cohort$admission_source)))
   cohort[, admission_source := relevel(factor(admission_source), ref = ref_src)]
@@ -826,33 +1003,78 @@ if (!is.null(standard_pop_raw)) {
   std_frame = NULL; standardization_source = "site_local"
 }
 
+# CHANGED 2026.10.14: the END OF LIFE fits standardize onto an end of life
+# standard population, not the all admissions one above. The all admissions
+# population describes a case mix in which almost nobody dies; predicting
+# P(hospice | death or hospice) for it is meaningless and would distort the
+# risk standardized probabilities. A second file, which the coordinating
+# center assembles from the aim2a3_standardization_margins_eol family, is
+# looked for next to the first (config key network_standard_population_eol_file,
+# version key network_standard_population_eol_version). Absent, the end of
+# life and terminal fits standardize site locally on their own analytic
+# sample. The all admissions population still serves the incidence fits.
+.cfg = function(key, default) if (!is.null(config[[key]])) config[[key]] else default
+standard_pop_eol_path    = .cfg("network_standard_population_eol_file",
+                                file.path(project_root, "config", "network_standard_population_eol.csv"))
+standard_pop_eol_version = .cfg("network_standard_population_eol_version", "site_local")
+std_frame_eol = NULL; standardization_source_eol = "site_local"
+if (file.exists(standard_pop_eol_path)) {
+  std_frame_eol = tryCatch(apply_std_transform(fread(standard_pop_eol_path)),
+                           error = function(e) { message("  End of life standard-pop mapping failed: ",
+                                                         conditionMessage(e)); NULL })
+  if (!is.null(std_frame_eol) && nrow(std_frame_eol) > 0) {
+    standardization_source_eol = paste0("network_eol:", standard_pop_eol_version)
+    message(sprintf("  End of life fits standardize on the NETWORK end of life population (%s rows, version '%s').",
+                    format(nrow(std_frame_eol), big.mark = ","), standard_pop_eol_version))
+  } else {
+    std_frame_eol = NULL
+    message("  End of life standard population unusable after level mapping -> site-local standardization.")
+  }
+} else {
+  message("  End of life standard population: not supplied -> end of life fits standardize site-locally.")
+}
+
 # Site covariate margins (shareable, non-identifying) so the coordinating center
 # can assemble the pooled network standard population (design decision 1).
-.marg_cat = function(col) {
-  if (!col %in% names(cohort)) return(NULL)
+# CHANGED 2026.10.14: built twice, for all admissions and for the end of life
+# rows, so the coordinating center can assemble both standard populations.
+# An apache2 sd row is added (cc_03 previously had to assume one).
+.marg_cat = function(col, dt) {
+  if (!col %in% names(dt)) return(NULL)
   # group by the level only (a constant cannot go in `by`, which must be full
   # length); attach the constant covariate name afterward.
-  out = cohort[, .(value = round(.N / nrow(cohort), 5)),
-               by = .(level = as.character(get(col)))]
+  out = dt[, .(value = round(.N / nrow(dt), 5)),
+           by = .(level = as.character(get(col)))]
   out[, covariate := col]
   out[, .(covariate, level, value)]
 }
 # change 5: margins report TRUE site means (not the locked model centers) so
 # the coordinating center can assemble the pooled network standard population
-std_margins = rbindlist(list(
-  data.table(covariate = "age_at_admission", level = "mean", value = round(mean(cohort$age_at_admission, na.rm = TRUE), 3)),
-  data.table(covariate = "age_at_admission", level = "sd",   value = round(sd(cohort$age_at_admission, na.rm = TRUE), 3)),
-  data.table(covariate = "elixhauser_vw",    level = "mean", value = round(mean(cohort$elixhauser_vw, na.rm = TRUE), 3)),
-  data.table(covariate = "elixhauser_vw",    level = "sd",   value = round(sd(cohort$elixhauser_vw, na.rm = TRUE), 3)),
-  if (apache2_available) data.table(covariate = "apache2", level = "mean", value = round(mean(cohort$apache2_score, na.rm = TRUE), 3)),
-  if (apache2_available) data.table(covariate = "apache2", level = "median", value = round(apache_med, 3)),
-  .marg_cat("sex_female"), .marg_cat("race_eth"), .marg_cat("dx_category"),
-  .marg_cat("pandemic_period"), .marg_cat("preexisting_code_status"), .marg_cat("admission_source")
-), fill = TRUE)
-std_margins[, `:=`(site = site_lowercase, n_cohort = nrow(cohort))]
+.build_margins = function(dt) {
+  out = rbindlist(list(
+    data.table(covariate = "age_at_admission", level = "mean", value = round(mean(dt$age_at_admission, na.rm = TRUE), 3)),
+    data.table(covariate = "age_at_admission", level = "sd",   value = round(sd(dt$age_at_admission, na.rm = TRUE), 3)),
+    data.table(covariate = "elixhauser_vw",    level = "mean", value = round(mean(dt$elixhauser_vw, na.rm = TRUE), 3)),
+    data.table(covariate = "elixhauser_vw",    level = "sd",   value = round(sd(dt$elixhauser_vw, na.rm = TRUE), 3)),
+    if (apache2_available) data.table(covariate = "apache2", level = "mean",   value = round(mean(dt$apache2_score, na.rm = TRUE), 3)),
+    if (apache2_available) data.table(covariate = "apache2", level = "sd",     value = round(sd(dt$apache2_score, na.rm = TRUE), 3)),
+    if (apache2_available) data.table(covariate = "apache2", level = "median", value = round(median(dt$apache2_score, na.rm = TRUE), 3)),
+    .marg_cat("sex_female", dt), .marg_cat("race_eth", dt), .marg_cat("dx_category", dt),
+    .marg_cat("pandemic_period", dt), .marg_cat("preexisting_code_status", dt), .marg_cat("admission_source", dt)
+  ), fill = TRUE)
+  out[, `:=`(site = site_lowercase, n_cohort = nrow(dt))]
+  out
+}
+std_margins = .build_margins(cohort)
 fwrite(std_margins, shareable_path(
   paste0("aim2a3_standardization_margins_", site_lowercase, "_", today, ".csv")))
-message("  Saved aim2a3_standardization_margins (for pooled-standard assembly).")
+message("  Saved aim2a3_standardization_margins (all admissions, for pooled-standard assembly).")
+
+std_margins_eol = .build_margins(cohort[outcome_category %in% eol_categories_raw])
+fwrite(std_margins_eol, shareable_path(
+  paste0("aim2a3_standardization_margins_eol_", site_lowercase, "_", today, ".csv")))
+message("  Saved aim2a3_standardization_margins_eol (end of life rows, for the eol standard population).")
+rm(std_margins_eol)
 
 
 # 3. Analytic dataset summary (shareable) --------------------------------------
@@ -1098,28 +1320,51 @@ message("\n--- Fitting binary GLMMs ---")
 # Encounters with outcome = routine_discharge are always in the reference group.
 # Each model is: logit(P(outcome_k)) = Xβ + (1|hospital_unit)
 
-outcomes_to_model = c(
-  "in_hospital_death_acute",
-  "same_facility_hospice_death",
-  "same_facility_hospice_alive",
-  "external_hospice_discharge",
-  "transfer_acute_facility",
-  "other_ama"
-)
+# CHANGED 2026.10.14 (research in progress feedback). Three analytic cohorts,
+# all cut from model_base (one admission per patient) further down:
+#
+#   eol (PRIMARY)  admissions ending in death or hospice. Outcomes are modeled
+#                  against in_hospital_death_acute, so each hospital effect is
+#                  the adjusted hospice to death ratio on the log odds scale,
+#                  the model version of the 2A.2 ratio.
+#   full           all dispositions, one admission per patient. INCIDENCE fits
+#                  only: any hospice and in hospital death, each against
+#                  routine_discharge, so the paper can still say how often
+#                  admissions end in hospice or death, not only how deaths are
+#                  routed. These are the only fits that still subsample.
+#   terminal       death linked sites only; membership by vital status (died
+#                  in hospital or within terminal_death_window_days of
+#                  discharge, any disposition) rather than by disposition.
+#                  Same fits as eol plus a fourth category,
+#                  died_30d_no_hospice. The concordance of its hospital
+#                  effects with the eol fits is the check on whether
+#                  disposition defined membership distorts the primary
+#                  results.
+#
+# Same facility hospice: the death / alive split that 01 assigns is collapsed
+# in model_base below, so same_facility_hospice is a single level here.
+eol_ref            = "in_hospital_death_acute"
+eol_outcomes       = c("same_facility_hospice", "external_hospice_discharge",
+                       "any_hospice_disposition")
+incidence_ref      = "routine_discharge"
+incidence_outcomes = c("any_hospice_disposition", "in_hospital_death_acute")
+terminal_outcomes  = c(eol_outcomes, "died_30d_no_hospice")
 
 # protocol §3.4.4: same-facility hospice is only meaningful where the pathway
-# exists and is captured, so those outcomes are analysed CONDITIONAL on class (a)
+# exists and is captured, so that outcome is analysed CONDITIONAL on class (a)
 # hospitals. The network-wide outcome, defined for every hospital, is any
 # documented hospice disposition (same-facility OR external).
-sf_outcomes = c("same_facility_hospice_death", "same_facility_hospice_alive")
+sf_outcomes = "same_facility_hospice"
 
-if ("any_hospice_disposition" %in% names(cohort)) {
-  outcomes_to_model = c(outcomes_to_model, "any_hospice_disposition")
-} else {
-  message("  NOTE: any_hospice_disposition not found in the cohort -- re-run 01 to build it (§3.4.4).")
+# any_hospice_disposition is the network wide outcome of every cohort here, so
+# it cannot be optional any more; derive it if 01 did not supply it
+if (!"any_hospice_disposition" %in% names(cohort)) {
+  message("  NOTE: any_hospice_disposition not found in the cohort -- derived here as any same-facility or external hospice disposition (re-run 01 to build it, protocol 3.4.4).")
+  cohort[, any_hospice_disposition := as.integer(outcome_category %in% c(
+    "same_facility_hospice_death", "same_facility_hospice_alive", "external_hospice_discharge"))]
 }
 if (!"pathway_class" %in% names(cohort)) {
-  message("  NOTE: pathway_class not found -- same-facility outcomes will NOT be restricted")
+  message("  NOTE: pathway_class not found -- the same-facility outcome will NOT be restricted")
   message("        to class (a) hospitals. Re-run 01 to build the §3.4.4 classification.")
 }
 
@@ -1136,6 +1381,21 @@ model_base = cohort[
     !is.na(race_eth) &
     !is.na(dx_category)
 ]
+
+# CHANGED 2026.10.14: collapse the two same facility hospice categories into
+# one, in the MODELING sample only. cohort keeps the split from 01, so 2A.1,
+# 2A.2, and the analytic summary above still report death and alive
+# separately. Every model below (binary GLMMs, multinomial, era refits) reads
+# outcome_category from model_base, so all of them see the same five
+# dispositions against routine discharge.
+n_sf_split = model_base[outcome_category %in% c("same_facility_hospice_death",
+                                                "same_facility_hospice_alive"), .N]
+model_base[, outcome_category := fifelse(
+  outcome_category %in% c("same_facility_hospice_death", "same_facility_hospice_alive"),
+  "same_facility_hospice", as.character(outcome_category))]
+message(sprintf("  Same-facility hospice: death and alive collapsed to one outcome (%s encounters).",
+                format(n_sf_split, big.mark = ",")))
+rm(n_sf_split)
 
 # ensure factor levels
 model_base[, sex_female := factor(sex_female)]
@@ -1170,11 +1430,111 @@ message(sprintf("  Analytic sample: %s encounters (%s excluded for missing covar
 if (!"health_system" %in% names(model_base))
   model_base[, health_system := site_lowercase]
 
-# reference group
-ref_group = model_base[outcome_category == "routine_discharge"]
+
+## analytic unit: one admission per patient (protocol 2A.3) --------------------
+# CHANGED 2026.10.13. The analytic unit is ONE admission per patient: the
+# LAST admission in the study period. Each patient then appears once, so
+# within patient dependence is removed by construction and no model carries a
+# patient term. (The patient level random effect, formerly attempted where
+# estimable and then kept as a sensitivity, was removed outright on
+# 2026.10.14: almost no CLIF site is small enough for lme4 to fit it.)
+# Everything fit from model_base below inherits the sample: the full cohort,
+# LST and ICU fits, the clinical course models, the multinomial, and the era
+# refits.
+#
+# "Last" is the latest admission_dttm among the patient's admissions in the
+# analytic sample, with ties broken by hospitalization_id so every site
+# resolves them the same way. The patient is attributed to the hospital of
+# that admission. An encounter with no patient_id cannot be linked to any
+# other, so it is kept as its own patient and the count is reported.
+#
+# Scope: this restricts the MODEL sample only. The unadjusted 2A.1 and 2A.2
+# tables, the analytic summary, and the standardization margins above are
+# built from cohort and still describe ALL admissions.
+if (!all(c("patient_id", "admission_dttm") %in% names(model_base)))
+  stop("patient_id and admission_dttm are both required to select one ",
+       "admission per patient.")
+
+setorder(model_base, patient_id, admission_dttm, hospitalization_id)
+pid_ok     = model_base[, !is.na(patient_id) & nzchar(patient_id)]
+model_base = model_base[!duplicated(patient_id, fromLast = TRUE) | !pid_ok]
+
+n_patients = nrow(model_base)
+pct_repeat = 100 * (n_model - n_patients) / n_model
+
+message(sprintf("  Analytic sample: last admission per patient, %s patients from %s encounters (%.1f%% of encounters were earlier admissions of a repeat patient).",
+                format(n_patients, big.mark = ","),
+                format(n_model, big.mark = ","), pct_repeat))
+if (any(!pid_ok))
+  message(sprintf("  NOTE: %s encounters have no patient_id; each is kept as its own patient.",
+                  format(sum(!pid_ok), big.mark = ",")))
+rm(pid_ok)
+
+
+## analytic cohorts: end of life (primary), full (incidence), terminal ----------
+# CHANGED 2026.10.14. All three are cut from model_base (one admission per
+# patient, same facility collapsed), so they share the covariate coding.
+
+# end of life cohort: the admission ended in death or hospice
+model_eol = model_base[outcome_category %in% c(eol_ref, "same_facility_hospice",
+                                               "external_hospice_discharge")]
+n_eol = nrow(model_eol)
+message(sprintf("  End of life cohort (PRIMARY): %s patients, %.1f%% of the analytic sample (%s in hospital deaths, %s same facility hospice, %s external hospice).",
+                format(n_eol, big.mark = ","), 100 * n_eol / n_patients,
+                format(model_eol[outcome_category == eol_ref, .N], big.mark = ","),
+                format(model_eol[outcome_category == "same_facility_hospice", .N], big.mark = ","),
+                format(model_eol[outcome_category == "external_hospice_discharge", .N], big.mark = ",")))
+
+# opportunity sensitivity: in hospital deaths within early_death_window_hours
+# of admission had no realistic hospice option (arrests, trauma, deaths soon
+# after arrival), and hospitals with more of them would look worse on hospice
+# vs death whatever their practice. Hospice rows are untouched.
+if (!"los_days" %in% names(model_eol))
+  model_eol[, los_days := as.numeric(difftime(discharge_dttm, admission_dttm, units = "days"))]
+model_eol[, early_death := as.integer(outcome_category == eol_ref &
+                                        !is.na(los_days) &
+                                        los_days < early_death_window_hours / 24)]
+message(sprintf("  Early deaths (in hospital death within %d h of admission): %s, %.1f%% of in hospital deaths; dropped in the eol_excl_death_%dh sensitivity.",
+                early_death_window_hours,
+                format(sum(model_eol$early_death), big.mark = ","),
+                100 * sum(model_eol$early_death) / max(model_eol[outcome_category == eol_ref, .N], 1L),
+                early_death_window_hours))
+
+# terminal cohort (death linked sites only): membership by vital status, so
+# the hospital's disposition decision does not decide who is in the cohort.
+# is_death_linked was set in 2A.2. Hospice rows keep their category; every
+# other disposition that ended in death within the window (routine, transfer,
+# AMA) becomes died_30d_no_hospice. Transfers are lumped in because the
+# receiving hospital's care is not observed here; their count is reported so
+# the lump is visible.
+if (is_death_linked && "days_discharge_to_death" %in% names(model_base)) {
+  died_in_window = model_base[, !is.na(days_discharge_to_death) &
+                                days_discharge_to_death >= 0 &
+                                days_discharge_to_death <= terminal_death_window_days]
+  model_term = model_base[outcome_category == eol_ref | died_in_window]
+  n_term_by_disp = model_term[, .N, by = outcome_category]
+  model_term[!outcome_category %in% c(eol_ref, "same_facility_hospice",
+                                      "external_hospice_discharge"),
+             outcome_category := "died_30d_no_hospice"]
+  message(sprintf("  Terminal cohort (death linked site, death within %d days of discharge): %s patients.",
+                  terminal_death_window_days, format(nrow(model_term), big.mark = ",")))
+  for (i in seq_len(nrow(n_term_by_disp)))
+    message(sprintf("    %-30s %s%s", n_term_by_disp$outcome_category[i],
+                    format(n_term_by_disp$N[i], big.mark = ","),
+                    if (!n_term_by_disp$outcome_category[i] %in% c(eol_ref, "same_facility_hospice", "external_hospice_discharge"))
+                      "  -> died_30d_no_hospice" else ""))
+  rm(died_in_window, n_term_by_disp)
+} else {
+  model_term = NULL
+  message("  Terminal cohort: not a death linked site (or no days_discharge_to_death) -> skipped.")
+}
+
+# reference group for the INCIDENCE fits (routine discharge). The end of life
+# and terminal fits use in hospital death; fit_family() sets that per family.
+ref_group = model_base[outcome_category == incidence_ref]
 n_ref = nrow(ref_group)
-message(sprintf("  Reference group (routine_discharge): %s encounters.",
-                format(n_ref, big.mark = ",")))
+message(sprintf("  Reference group, incidence fits (%s): %s encounters.",
+                incidence_ref, format(n_ref, big.mark = ",")))
 
 # build model formulas (calendar-era term included).
 # base_rhs is the single source of truth: formula_fixed, formula_glmm, the
@@ -1214,7 +1574,7 @@ if (length(extra_base))
 
 
 ## random-effect structure (protocol 2A.3) -------------------------------------
-# The hospital random intercept is always included. Two further terms are
+# The hospital random intercept is always included. One further term is
 # protocol-specified but only conditionally estimable:
 #
 #   (1 | health_system) -- hospitals nested in health systems. A single CLIF site
@@ -1222,55 +1582,60 @@ if (length(extra_base))
 #     site-local data; it is recovered in the pooled coordinating-center model.
 #     Included here only if a site genuinely spans several systems.
 #
-#   (1 | patient_id) -- within-patient dependence from repeat admissions. The
-#     protocol asks for this "where estimable"; with hundreds of thousands of
-#     patients lme4 cannot fit it in reasonable time, so it is attempted only
-#     below patient_re_max_levels. Where it is not estimable, the prespecified
-#     one-admission-per-patient sensitivity analysis carries the argument instead
-#     (it removes within-patient dependence by construction).
+# There is no patient term. The analytic sample has one admission per
+# patient, so (1 | patient_id) would be degenerate; the patient level random
+# effect and its estimability test were removed 2026.10.14.
 
 # health_system was populated above, before the reference-group split.
 n_systems = model_base[, uniqueN(health_system)]
 
-patient_re_max_levels = 50000L   # beyond this, glmer is impractical
-have_pid     = "patient_id" %in% names(model_base)
-n_patients   = if (have_pid) model_base[, uniqueN(patient_id)] else NA_integer_
-pct_repeat   = if (have_pid) 100 * model_base[, sum(duplicated(patient_id))] / nrow(model_base) else 0
-
-use_system_re  = n_systems >= 3L
-use_patient_re = have_pid && pct_repeat >= 2 && n_patients <= patient_re_max_levels
+use_system_re = n_systems >= 3L
 
 message(sprintf("  Health systems in local data: %d%s", n_systems,
                 if (use_system_re) "" else " -> system random effect NOT estimable locally (pooled analysis only)"))
-if (have_pid) {
-  message(sprintf("  Patients: %s | encounters from repeat patients: %.1f%%",
-                  format(n_patients, big.mark = ","), pct_repeat))
-  if (use_patient_re) {
-    message("  -> including a patient-level random intercept.")
-  } else if (pct_repeat < 2) {
-    message("  -> repeat admissions negligible; patient random intercept omitted.")
-  } else {
-    message(sprintf("  -> %s patients exceeds patient_re_max_levels (%s); patient random intercept NOT fitted.",
-                    format(n_patients, big.mark = ","), format(patient_re_max_levels, big.mark = ",")))
-    message("     Within-patient dependence is addressed by the one-admission-per-patient sensitivity analysis.")
-  }
-}
 
-re_terms = c("(1 | hospital_unit)",
-             if (use_system_re)  "(1 | health_system)",
-             if (use_patient_re) "(1 | patient_id)")
-re_rhs = paste(re_terms, collapse = " + ")
+# ADDED 2026.10.13: the analytic unit travels with the run configuration, so
+# the coordinating center can see which admission rule a site's rows were fit
+# under. Same file as section 0, rewritten with more rows. EXTENDED
+# 2026.10.14 with the cohort definitions and sizes, so a missing terminal_30d
+# family reads as "not a death linked site" rather than as a failure.
+run_config = rbind(run_config, data.table(
+  setting = c("primary_admission_rule", "n_encounters_all_admissions",
+              "n_patients", "pct_repeat_admissions",
+              "primary_cohort", "eol_reference_category", "n_eol",
+              "early_death_window_hours", "n_early_deaths",
+              "terminal_cohort", "terminal_death_window_days", "n_terminal",
+              "elixhauser_poa_restricted", "poa_column",
+              "pct_dx_poa_present", "pct_dx_poa_not_present", "pct_dx_poa_not_stated"),
+  value   = c("last_per_patient",
+              format(n_model, scientific = FALSE),
+              format(n_patients, scientific = FALSE),
+              format(round(pct_repeat, 2), nsmall = 2),
+              "end_of_life", eol_ref, format(n_eol, scientific = FALSE),
+              format(early_death_window_hours, scientific = FALSE),
+              format(sum(model_eol$early_death), scientific = FALSE),
+              if (is.null(model_term)) "not_death_linked" else "run",
+              format(terminal_death_window_days, scientific = FALSE),
+              if (is.null(model_term)) "0" else format(nrow(model_term), scientific = FALSE),
+              # ADDED 2026.10.14: how complete the POA restriction of the
+              # comorbidity index was at this site (section 2a)
+              format(elix_poa_restricted),
+              if (is.na(poa_col)) "none" else poa_col,
+              format(round(100 * poa_share[["present"]], 2), nsmall = 2),
+              format(round(100 * poa_share[["not_present"]], 2), nsmall = 2),
+              format(round(100 * poa_share[["not_stated"]], 2), nsmall = 2)),
+  site           = site_lowercase,
+  script_version = run_config$script_version[1]), use.names = TRUE)
+fwrite(run_config, shareable_path(
+  paste0("aim2a3_run_config_", site_lowercase, "_", today, ".csv")))
 
-# random-effect structure WITHOUT the patient term, for the one-admission-per-
-# patient sensitivity (where each patient appears once, so the term is degenerate)
-re_rhs_nopat = paste(c("(1 | hospital_unit)",
-                       if (use_system_re) "(1 | health_system)"), collapse = " + ")
+re_rhs = paste(c("(1 | hospital_unit)",
+                 if (use_system_re) "(1 | health_system)"), collapse = " + ")
 
 message(sprintf("  Random effects:            %s", re_rhs))
 
 formula_fixed = as.formula(paste("y ~", base_rhs))
 formula_glmm  = as.formula(paste("y ~", base_rhs, "+", re_rhs))
-formula_glmm_nopat = as.formula(paste("y ~", base_rhs, "+", re_rhs_nopat))
 
 # SECONDARY clinical-course model (protocol 2A.3): adds post-admission clinical
 # course back onto the admission-fixed base. The protocol interprets this as a
@@ -1332,9 +1697,9 @@ sigma_ci_fast = function(fit, model_dt, level = 0.95) {
   k  = which(names(th) == "hospital_unit.(Intercept)")
   if (length(k) != 1L) k = 1L
 
-  # deviance with the hospital SD held at s. When the site also fits a system or
-  # patient random effect, those variance components are optimized out (cheap:
-  # at most two nuisance parameters).
+  # deviance with the hospital SD held at s. When the site also fits a system
+  # random effect, that variance component is optimized out (cheap: one
+  # nuisance parameter).
   pdev = if (length(th) == 1L) {
     function(s) dd(s)
   } else {
@@ -1370,9 +1735,17 @@ sigma_ci_fast = function(fit, model_dt, level = 0.95) {
 # linear predictor inside the standardization, so RS probabilities and the
 # p10/p90 contrast are population scale. sigma^2, MOR, ICC, reliability, and
 # ranks depend only on the random effects and need no correction.
+# CHANGED 2026.10.14: the standardization frame, its provenance, and the
+# reference category are ARGUMENTS (std_frame, std_source, std_version,
+# ref_label) rather than globals, because the end of life fits standardize on
+# a different population from the incidence fits. std_frame = NULL means
+# site local standardization on model_dt.
 hospital_variation_profile = function(fit, model_dt, outcome_label, subgroup_label,
                                       n_outcome, n_hospitals,
-                                      B = 2000, std_n = 10000, lp_offset = 0) {
+                                      B = 2000, std_n = 10000, lp_offset = 0,
+                                      std_frame = NULL, std_source = "site_local",
+                                      std_version = "site_local",
+                                      ref_label = NA_character_) {
 
   vc     = as.data.table(VarCorr(fit))
   sigma2 = vc[grp == "hospital_unit", vcov][1]
@@ -1418,7 +1791,7 @@ hospital_variation_profile = function(fit, model_dt, outcome_label, subgroup_lab
   # change 4: when rows are compressed patterns, draw patterns with prob
   # proportional to row_weight (with replacement) to recover the encounter
   # level case mix in the site local standardization sample
-  std_dt = if (exists("std_frame") && !is.null(std_frame)) std_frame
+  std_dt = if (!is.null(std_frame)) std_frame
   else if ("row_weight" %in% names(model_dt) && any(model_dt$row_weight > 1L))
     model_dt[sample(.N, std_n, replace = TRUE, prob = row_weight)]
   else if (nrow(model_dt) > std_n) model_dt[sample(.N, std_n)] else model_dt
@@ -1441,6 +1814,7 @@ hospital_variation_profile = function(fit, model_dt, outcome_label, subgroup_lab
     hospital_unit   = rownames(re),
     outcome         = outcome_label,
     subgroup        = subgroup_label,
+    reference_category = ref_label,
     site            = site_lowercase,
     ranef_intercept = round(u, 4),
     ranef_sd        = round(sd_u, 4),
@@ -1448,8 +1822,8 @@ hospital_variation_profile = function(fit, model_dt, outcome_label, subgroup_lab
     rs_prob_lower   = round(rs_lo, 5),
     rs_prob_upper   = round(rs_hi, 5),
     rs_prob_se      = round((rs_hi - rs_lo) / (2 * 1.96), 5),  # for CC meta-analysis
-    standardization = if (exists("standardization_source")) standardization_source else "site_local",
-    standard_pop_version = standard_pop_version,
+    standardization = std_source,
+    standard_pop_version = std_version,
     reliability     = round(reliability, 3),
     rank_median     = round(rank_med, 1),
     rank_lower      = round(rank_lo, 1),
@@ -1464,6 +1838,7 @@ hospital_variation_profile = function(fit, model_dt, outcome_label, subgroup_lab
   summ = data.table(
     outcome               = outcome_label,
     subgroup              = subgroup_label,
+    reference_category    = ref_label,
     site                  = site_lowercase,
     model_type            = "glmm",
     sigma2_hospital       = round(sigma2, 4),
@@ -1489,9 +1864,17 @@ hospital_variation_profile = function(fit, model_dt, outcome_label, subgroup_lab
 
 
 # function to fit one binary GLMM
-fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
+# CHANGED 2026.10.14: ref_label names the reference category the globals
+# ref_group / n_ref currently hold (set per family by fit_family()); it is
+# carried into every output table as reference_category so a vs death row can
+# never be confused with a vs routine row. std_frame / std_source /
+# std_version are passed through to hospital_variation_profile().
+fit_binary_glmm = function(outcome_label, subgroup_label = "eol",
                            f_fixed = formula_fixed, f_glmm = formula_glmm,
-                           stage_label = "primary") {
+                           stage_label = "primary",
+                           ref_label = eol_ref,
+                           std_frame = NULL, std_source = "site_local",
+                           std_version = "site_local") {
 
   # protocol §3.4.4: the PRIMARY same-facility analysis is CONDITIONAL on class (a)
   # hospitals (pathway available and reliably captured). At other hospitals the
@@ -1595,6 +1978,7 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
         model_type = "fixed_only",
         n_outcome  = n_outcome,
         n_reference = n_ref,
+        reference_category = ref_label,
         n_hospitals_eff = n_hospitals_eff,
         aic        = round(AIC(fit_fixed), 1),
         control_sampled  = ss$sampled,
@@ -1613,7 +1997,8 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
         sigma2_hospital = NA_real_,
         icc             = NA_real_,
         n_outcome       = n_outcome,
-        n_hospitals_eff     = n_hospitals_eff
+        n_hospitals_eff     = n_hospitals_eff,
+        reference_category  = ref_label
       )
 
       ranef_dt = NULL
@@ -1678,6 +2063,7 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
         model_type = "glmm",
         n_outcome  = n_outcome,
         n_reference = n_ref,
+        reference_category = ref_label,
         n_hospitals_eff = n_hospitals_eff,
         aic        = round(AIC(fit), 1),
         control_sampled  = ss$sampled,
@@ -1700,7 +2086,8 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
         sigma2_hospital = round(sigma2_hosp, 4),
         icc             = round(icc_val, 4),
         n_outcome       = n_outcome,
-        n_hospitals_eff     = n_hospitals_eff
+        n_hospitals_eff     = n_hospitals_eff,
+        reference_category  = ref_label
       )
 
       message(sprintf("      ICC = %.4f (σ² = %.4f)", icc_val, sigma2_hosp))
@@ -1712,6 +2099,7 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
         ranef_intercept = round(re[, 1], 4),
         outcome    = outcome_label,
         subgroup   = subgroup_label,
+        reference_category = ref_label,
         site       = site_lowercase
       )
 
@@ -1720,7 +2108,9 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
       prof = tryCatch(
         hospital_variation_profile(fit, model_dt, outcome_label, subgroup_label,
                                    n_outcome, n_hospitals_eff,
-                                   lp_offset = if (ss$sampled) log(ss$fraction) else 0),
+                                   lp_offset = if (ss$sampled) log(ss$fraction) else 0,
+                                   std_frame = std_frame, std_source = std_source,
+                                   std_version = std_version, ref_label = ref_label),
         error = \(e) {
           message(sprintf("      Hospital profiling failed: %s", e$message))
           NULL
@@ -1757,6 +2147,7 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
           model_type = "fixed_fallback",
           n_outcome  = n_outcome,
           n_reference = n_ref,
+          reference_category = ref_label,
           n_hospitals_eff = n_hospitals_eff,
           aic        = round(AIC(fit_fixed), 1),
           control_sampled  = ss$sampled,
@@ -1770,7 +2161,8 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
           outcome = outcome_label, subgroup = subgroup_label,
           site = site_lowercase, model_type = "fixed_fallback",
           sigma2_hospital = NA_real_, icc = NA_real_,
-          n_outcome = n_outcome, n_hospitals_eff = n_hospitals_eff
+          n_outcome = n_outcome, n_hospitals_eff = n_hospitals_eff,
+          reference_category = ref_label
         )
 
         return(list(coefficients = coefs, icc = icc_row, ranef = NULL))
@@ -1787,165 +2179,154 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "full_cohort",
 
 # --- Change 4 payoff diagnostic (always printed) ---
 # How much would exact row compression shrink the design? Computed on the
-# primary model variables over the analytic sample (y adds at most a factor
+# primary model variables over the END OF LIFE sample (y adds at most a factor
 # of ~2 per fit). Decide row_compress_enabled from this line in the site log.
-diag_vars  = intersect(all.vars(formula_glmm), names(model_base))
-n_patterns = nrow(unique(model_base[, ..diag_vars]))
-message(sprintf("\n  Row compression diagnostic: %s unique covariate patterns / %s encounters (shrink factor %.2f). row_compress_enabled = %s.",
+# With the primary fits now a few percent of admissions, compression is
+# unlikely to be worth switching on; the incidence fits carry their own cost
+# through subsampling.
+diag_vars  = intersect(all.vars(formula_glmm), names(model_eol))
+n_patterns = nrow(unique(model_eol[, ..diag_vars]))
+message(sprintf("\n  Row compression diagnostic (eol): %s unique covariate patterns / %s encounters (shrink factor %.2f). row_compress_enabled = %s.",
                 format(n_patterns, big.mark = ","),
-                format(nrow(model_base), big.mark = ","),
-                nrow(model_base) / max(n_patterns, 1L),
+                format(nrow(model_eol), big.mark = ","),
+                nrow(model_eol) / max(n_patterns, 1L),
                 row_compress_enabled))
 rm(diag_vars, n_patterns)
 
 
-# --- Run models for full cohort ---
+# --- fit one model family ---------------------------------------------------
+# ADDED 2026.10.14. fit_binary_glmm() reads model_base, ref_group, n_ref and
+# n_hospitals from the global environment (so the §3.4.4 class (a) restriction
+# and the reference group are applied consistently inside it). The subgroup
+# blocks used to swap those globals by hand and restore them afterwards; with
+# eight families that is now done here, once. The globals are restored on
+# exit whatever happens inside the fits.
+fit_family = function(dt, subgroup_label, ref_label, outcomes,
+                      f_fixed = formula_fixed, f_glmm = formula_glmm,
+                      stage_label = "primary",
+                      std_frame = NULL, std_source = "site_local",
+                      std_version = "site_local",
+                      min_ref = 20L, min_rows = 100L) {
+  saved = list(model_base = model_base, ref_group = ref_group,
+               n_ref = n_ref, n_hospitals = n_hospitals)
+  on.exit({
+    model_base  <<- saved$model_base
+    ref_group   <<- saved$ref_group
+    n_ref       <<- saved$n_ref
+    n_hospitals <<- saved$n_hospitals
+  }, add = TRUE)
 
-message("\n  === Full cohort models ===")
+  model_base  <<- dt
+  ref_group   <<- dt[outcome_category == ref_label]
+  n_ref       <<- nrow(ref_group)
+  n_hospitals <<- uniqueN(dt$hospital_unit)
 
-full_results = lapply(outcomes_to_model, \(out) {
-  fit_binary_glmm(out, "full_cohort")
-})
-names(full_results) = outcomes_to_model
-full_results = Filter(Negate(is.null), full_results)
+  message(sprintf("\n  === %s | %s: %s encounters, %s reference (%s), %d hospitals ===",
+                  stage_label, subgroup_label,
+                  format(nrow(dt), big.mark = ","),
+                  format(n_ref, big.mark = ","), ref_label, n_hospitals))
 
-
-# --- Run models for LST subgroup ---
-
-message("\n  === LST (any) subgroup models ===")
-
-# temporarily replace model_base with LST subset
-model_base_full = copy(model_base)
-ref_group_full  = copy(ref_group)
-n_ref_full      = n_ref
-n_hospitals_full = n_hospitals
-
-model_base = model_base_full[lst_any_flag == 1L]
-ref_group  = model_base[outcome_category == "routine_discharge"]
-n_ref      = nrow(ref_group)
-n_hospitals = uniqueN(model_base$hospital_unit)
-
-if (n_ref >= 20 && nrow(model_base) >= 100) {
-  lst_results = lapply(outcomes_to_model, \(out) {
-    fit_binary_glmm(out, "lst_any")
-  })
-  names(lst_results) = outcomes_to_model
-  lst_results = Filter(Negate(is.null), lst_results)
-} else {
-  message("  LST subgroup too small for modeling — skipping.")
-  lst_results = list()
-}
-
-# restore
-model_base  = model_base_full
-ref_group   = ref_group_full
-n_ref       = n_ref_full
-n_hospitals = n_hospitals_full
-rm(model_base_full, ref_group_full)
-
-
-# --- Run models for ICU-only subgroup (§3.4.3 sensitivity) ---
-
-message("\n  === ICU-only subgroup models ===")
-
-model_base_full = copy(model_base)
-ref_group_full  = copy(ref_group)
-n_ref_full      = n_ref
-n_hospitals_full = n_hospitals
-
-model_base = model_base_full[icu_flag == 1L]
-ref_group  = model_base[outcome_category == "routine_discharge"]
-n_ref      = nrow(ref_group)
-n_hospitals = uniqueN(model_base$hospital_unit)
-
-if (n_ref >= 20 && nrow(model_base) >= 100) {
-  icu_results = lapply(outcomes_to_model, \(out) {
-    fit_binary_glmm(out, "icu_only")
-  })
-  names(icu_results) = outcomes_to_model
-  icu_results = Filter(Negate(is.null), icu_results)
-} else {
-  message("  ICU subgroup too small for modeling — skipping.")
-  icu_results = list()
-}
-
-# restore
-model_base  = model_base_full
-ref_group   = ref_group_full
-n_ref       = n_ref_full
-n_hospitals = n_hospitals_full
-rm(model_base_full, ref_group_full)
-
-
-# --- Prespecified sensitivity: one admission per patient (protocol 2A.3) ------
-# Removes within-patient dependence by construction (each patient contributes a
-# single, first, admission). This is the protocol's stated recourse when the
-# patient-level random intercept is not estimable. Fitted WITHOUT the patient
-# random effect, which would be degenerate here. Results carry
-# subgroup = "one_admission_per_patient" in the standard coefficient tables.
-
-if ("patient_id" %in% names(model_base)) {
-
-  model_base_full  = copy(model_base)
-  ref_group_full   = ref_group
-  n_ref_full       = n_ref
-  n_hospitals_full = n_hospitals
-
-  if ("admission_dttm" %in% names(model_base)) {
-    setorder(model_base, patient_id, admission_dttm)
-  } else {
-    setorder(model_base, patient_id)
-  }
-  model_base  = model_base[!duplicated(patient_id)]
-  ref_group   = model_base[outcome_category == "routine_discharge"]
-  n_ref       = nrow(ref_group)
-  n_hospitals = uniqueN(model_base$hospital_unit)
-
-  message(sprintf("\n  === One-admission-per-patient sensitivity (%s of %s encounters) ===",
-                  format(nrow(model_base), big.mark = ","),
-                  format(nrow(model_base_full), big.mark = ",")))
-
-  if (n_ref >= 20 && nrow(model_base) >= 100) {
-    oneadm_results = lapply(outcomes_to_model, \(out) {
-      fit_binary_glmm(out, "one_admission_per_patient",
-                      formula_fixed, formula_glmm_nopat)
-    })
-    names(oneadm_results) = outcomes_to_model
-    oneadm_results = Filter(Negate(is.null), oneadm_results)
-  } else {
+  if (n_ref < min_ref || nrow(dt) < min_rows) {
     message("  Too small for modeling -- skipping.")
-    oneadm_results = list()
+    return(list())
   }
-
-  # restore the full analytic sample
-  model_base  = model_base_full
-  ref_group   = ref_group_full
-  n_ref       = n_ref_full
-  n_hospitals = n_hospitals_full
-  rm(model_base_full, ref_group_full)
-
-} else {
-  oneadm_results = list()
+  res = lapply(outcomes, \(out) {
+    fit_binary_glmm(out, subgroup_label, f_fixed, f_glmm, stage_label,
+                    ref_label = ref_label, std_frame = std_frame,
+                    std_source = std_source, std_version = std_version)
+  })
+  names(res) = outcomes
+  Filter(Negate(is.null), res)
 }
 
 
-# --- Secondary clinical-course models (full cohort) ---
+# --- PRIMARY: end of life cohort, outcomes vs in hospital death -------------
+# subgroup = "eol". same_facility_hospice is fit at class (a) hospitals only
+# (inside fit_binary_glmm); external_hospice_discharge and
+# any_hospice_disposition at every hospital.
+
+eol_results = fit_family(model_eol, "eol", eol_ref, eol_outcomes,
+                         std_frame = std_frame_eol,
+                         std_source = standardization_source_eol,
+                         std_version = standard_pop_eol_version)
+
+
+# --- LST and ICU subgroups within the end of life cohort ---------------------
+
+eol_lst_results = fit_family(model_eol[lst_any_flag == 1L], "eol_lst_any",
+                             eol_ref, eol_outcomes,
+                             std_frame = std_frame_eol,
+                             std_source = standardization_source_eol,
+                             std_version = standard_pop_eol_version)
+
+# §3.4.3 sensitivity
+eol_icu_results = fit_family(model_eol[icu_flag == 1L], "eol_icu_only",
+                             eol_ref, eol_outcomes,
+                             std_frame = std_frame_eol,
+                             std_source = standardization_source_eol,
+                             std_version = standard_pop_eol_version)
+
+
+# --- Opportunity sensitivity: drop early in hospital deaths ------------------
+# In hospital deaths within early_death_window_hours of admission are removed
+# from the reference group (early_death is 0 for every hospice row).
+
+eol_early_results = fit_family(model_eol[early_death == 0L],
+                               sprintf("eol_excl_death_%dh", early_death_window_hours),
+                               eol_ref, eol_outcomes,
+                               std_frame = std_frame_eol,
+                               std_source = standardization_source_eol,
+                               std_version = standard_pop_eol_version)
+
+
+# --- Secondary clinical-course models (end of life cohort) -------------------
 # Protocol 2A.3: this model conditions on post-admission clinical course, so it
 # answers a DIFFERENT question than the primary model and is reported separately.
-# It is never merged into all_coefs / all_icc.
-
-message("\n  === Secondary clinical-course models (full cohort) ===")
+# It is never merged into all_coefs / all_icc. Fit on the end of life cohort,
+# like the primary.
 
 if (isTRUE(run_clinical_course)) {
-  course_results = lapply(outcomes_to_model, \(out) {
-    fit_binary_glmm(out, "full_cohort", formula_fixed_course, formula_glmm_course,
-                    stage_label = "clinical_course")
-  })
-  names(course_results) = outcomes_to_model
-  course_results = Filter(Negate(is.null), course_results)
+  course_results = fit_family(model_eol, "eol", eol_ref, eol_outcomes,
+                              formula_fixed_course, formula_glmm_course,
+                              stage_label = "clinical_course",
+                              std_frame = std_frame_eol,
+                              std_source = standardization_source_eol,
+                              std_version = standard_pop_eol_version)
 } else {
   message("  DISABLED by run_clinical_course = FALSE (recorded in aim2a3_run_config).")
   course_results = list()
+}
+
+
+# --- INCIDENCE fits: full one admission sample, outcomes vs routine discharge -
+# subgroup = "full_cohort_incidence". How often admissions end in hospice or
+# in hospital death, which the end of life fits cannot say. These are the only
+# fits with a routine discharge reference group, so the only ones that still
+# subsample controls at large sites (change 1) and the only ones that use the
+# all admissions standard population.
+
+incidence_results = fit_family(model_base, "full_cohort_incidence",
+                               incidence_ref, incidence_outcomes,
+                               std_frame = std_frame,
+                               std_source = standardization_source,
+                               std_version = standard_pop_version)
+
+
+# --- Terminal cohort (death linked sites): membership by vital status -------
+# subgroup = "terminal_30d". The same outcomes as eol plus died_30d_no_hospice,
+# all vs in hospital death. Standardized on the end of life population so its
+# profile is comparable with the eol profile; the concordance table in the
+# export section compares the two sets of hospital effects.
+
+if (!is.null(model_term)) {
+  terminal_results = fit_family(model_term,
+                                sprintf("terminal_%dd", terminal_death_window_days),
+                                eol_ref, terminal_outcomes,
+                                std_frame = std_frame_eol,
+                                std_source = standardization_source_eol,
+                                std_version = standard_pop_eol_version)
+} else {
+  terminal_results = list()
 }
 
 
@@ -1998,7 +2379,8 @@ message("\n--- Analysis 2.2: Multinomial mixed model (primary) ---")
 # FALSE and aim2a3_model_consistency was never written at any site (dead code).
 # Assemble the binary GLMM profiling results here, before the multinomial fit;
 # the export section rebuilds the same objects later, unchanged.
-all_results_pre = c(full_results, lst_results, icu_results, oneadm_results)
+all_results_pre = c(eol_results, eol_lst_results, eol_icu_results, eol_early_results,
+                    incidence_results, terminal_results)
 all_var_summary = rbindlist(
   Filter(Negate(is.null), lapply(all_results_pre, \(r) r$var_summary)), fill = TRUE)
 all_hosp_profile = rbindlist(
@@ -2011,32 +2393,50 @@ mn_model_type      = "none"
 mn_fallback_reason = NA_character_
 mn_ok = requireNamespace("mclogit", quietly = TRUE)
 
+# CHANGED 2026.10.14: the multinomial is fit on the END OF LIFE cohort at
+# CLASS (a) hospitals only: three levels (in hospital death, same facility
+# hospice, external hospice) against in hospital death. At class (b) and (c)
+# hospitals same facility hospice is a structural zero, which a three level
+# model cannot carry, so those hospitals are left out here; the network wide
+# composition that exists for every hospital is the any_hospice_disposition
+# binary vs death in the eol family. mn_dt is built before the switch so that
+# a site with NO class (a) hospitals (UMN until its ADT mapping is fixed)
+# records a SKIP with a reason rather than a failed fit.
+if ("pathway_class" %in% names(model_eol)) {
+  mn_dt = model_eol[pathway_class == "a_available_captured"]
+} else {
+  message("  NOTE: pathway_class not found -- multinomial fit on ALL hospitals; same facility hospice may be a structural zero at some.")
+  mn_dt = model_eol
+}
+
 if (!isTRUE(run_multinomial)) {
   # Package A: skipped by switch, not failed — the status file says so
   mn_model_type      = "disabled"
   mn_fallback_reason = "disabled by run_multinomial switch (Package A reduction)"
   message("  DISABLED by run_multinomial = FALSE (recorded in aim2a3_run_config and aim2_multinomial_status).")
+} else if (mn_ok && nrow(mn_dt) == 0L) {
+  mn_model_type      = "skipped"
+  mn_fallback_reason = "no class (a) hospitals in the end of life cohort; multinomial not attempted"
+  message("  SKIPPED: no class (a) hospitals in the end of life cohort (recorded in aim2_multinomial_status).")
 } else if (mn_ok) {
   library(mclogit)
 
-  mn_dt = model_base[outcome_category %in% c("routine_discharge", outcomes_to_model)]
-
-  # change 1: the routine discharge category is sampled the same way as the
-  # binary reference groups. Intercepts are then on the sampled scale
-  # (true = sampled + log(f)); the standardized composition is reweighted back
-  # to population scale below (routine column / f, renormalize).
-  mn_routine = mn_dt[outcome_category == "routine_discharge"]
-  mn_events  = mn_dt[outcome_category != "routine_discharge"]
-  ss_mn = subsample_controls(mn_routine, nrow(mn_events))
+  # change 1: the reference category is sampled the same way as the binary
+  # reference groups. With in hospital death as the reference this is a no op
+  # at every site (deaths never reach the threshold); the machinery is kept
+  # so the composition rescale below stays correct if the threshold changes.
+  mn_ref_rows = mn_dt[outcome_category == eol_ref]
+  mn_events   = mn_dt[outcome_category != eol_ref]
+  ss_mn = subsample_controls(mn_ref_rows, nrow(mn_events))
   if (ss_mn$sampled) {
-    message(sprintf("  Multinomial: routine discharge subsampled %s -> %s (f = %.5f).",
-                    format(nrow(mn_routine), big.mark = ","),
+    message(sprintf("  Multinomial: reference (%s) subsampled %s -> %s (f = %.5f).",
+                    eol_ref, format(nrow(mn_ref_rows), big.mark = ","),
                     format(ss_mn$n_used, big.mark = ","), ss_mn$fraction))
     mn_dt = rbind(ss_mn$ref, mn_events)
   }
-  rm(mn_routine, mn_events)
+  rm(mn_ref_rows, mn_events)
 
-  mn_dt[, outcome_mn := relevel(factor(outcome_category), ref = "routine_discharge")]
+  mn_dt[, outcome_mn := relevel(factor(outcome_category), ref = eol_ref)]
 
   message(sprintf("  Multinomial: %s encounters, %d hospitals, %d outcome levels.",
                   format(nrow(mn_dt), big.mark = ","),
@@ -2075,9 +2475,8 @@ if (!isTRUE(run_multinomial)) {
     message("  WARNING: multinomial design may still be rank deficient (aliased factor level?); mblogit can fail on this.")
 
   # Random structure mirrors the binary GLMMs (system term where a site spans
-  # multiple systems; patient term is NOT added -- mblogit cannot carry hundreds
-  # of thousands of patient levels, and within-patient dependence is handled by
-  # the one-admission-per-patient sensitivity). mblogit takes a LIST of formulas.
+  # multiple systems; no patient term, since model_base holds one admission
+  # per patient). mblogit takes a LIST of formulas.
   mn_random = c(list(~ 1 | hospital_unit),
                 if (exists("use_system_re") && isTRUE(use_system_re)) list(~ 1 | health_system))
   if (length(mn_random) == 1L) mn_random = mn_random[[1]]
@@ -2095,7 +2494,7 @@ if (!isTRUE(run_multinomial)) {
   # hospital random effects. As with the binary fixed_only fits, fallback SEs
   # do not account for within hospital correlation.
   mn_hosp_n      = mn_dt[, uniqueN(hospital_unit)]
-  mn_hosp_events = mn_dt[outcome_category != "routine_discharge", uniqueN(hospital_unit)]
+  mn_hosp_events = mn_dt[outcome_category != eol_ref, uniqueN(hospital_unit)]
   mn_use_re      = mn_hosp_n >= 3 && mn_hosp_events >= 2
 
   t_fit_mn = Sys.time()
@@ -2122,8 +2521,8 @@ if (!isTRUE(run_multinomial)) {
   if (!is.null(mn_fit)) {
     mn_fitted = TRUE
     mn_model_type = "multinomial_glmm"
-    record_timing("multinomial", "all_dispositions", "full_cohort",
-                  nrow(mn_dt), nrow(mn_dt[outcome_category != "routine_discharge"]),
+    record_timing("multinomial", "all_dispositions", "eol",
+                  nrow(mn_dt), nrow(mn_dt[outcome_category != eol_ref]),
                   t_fit_mn)
     mn_coefs = as.data.table(summary(mn_fit)$coefficients, keep.rownames = "term")
     setnames(mn_coefs, 1:5, c("term", "estimate", "se", "z_value", "p_value"))
@@ -2132,6 +2531,7 @@ if (!isTRUE(run_multinomial)) {
       ci_lower = round(exp(estimate - 1.96 * se), 3),
       ci_upper = round(exp(estimate + 1.96 * se), 3),
       model_type = "multinomial_mblogit", site = site_lowercase,
+      subgroup = "eol", reference_category = eol_ref,
       # change 1: intercept rows are on the sampled scale when subsampled
       # (population intercept = sampled + log(control_fraction))
       control_sampled  = ss_mn$sampled,
@@ -2156,7 +2556,8 @@ if (!isTRUE(run_multinomial)) {
         data.table(outcome = sub("~.*$", "", names(diag(mn_vc[[1]]))[i]),
                    sigma2_hospital = round(s2, 4),
                    icc = round(s2 / (s2 + pi^2/3), 4),
-                   model_type = "multinomial_mblogit", site = site_lowercase)
+                   model_type = "multinomial_mblogit", site = site_lowercase,
+                   subgroup = "eol", reference_category = eol_ref)
       }))
       fwrite(mn_icc, shareable_path(
         paste0("aim2_multinomial_icc_", site_lowercase, "_", today, ".csv")))
@@ -2171,13 +2572,15 @@ if (!isTRUE(run_multinomial)) {
     # standardized patient population (the same rows for every hospital), then
     # average. Because the multinomial is one joint model, the predicted category
     # probabilities for a patient sum to 1 by construction, so each hospital's
-    # standardized composition also sums to 1 -- the property seven separate
+    # standardized composition also sums to 1 -- the property separate
     # binary models cannot provide, and the reason the composition comes from
     # this model rather than from the GLMMs.
     mn_composition = tryCatch({
       std_n  = 10000L
       set.seed(20260713)
-      std_dt = if (exists("std_frame") && !is.null(std_frame)) copy(std_frame)
+      # end of life standard population (section 2f), never the all
+      # admissions one: this composition is conditional on death or hospice
+      std_dt = if (!is.null(std_frame_eol)) copy(std_frame_eol)
       else if (nrow(mn_dt) > std_n) mn_dt[sample(.N, std_n)] else copy(mn_dt)
       hosp_ids = mn_dt[, sort(unique(hospital_unit))]
       lvls = levels(mn_dt$outcome_mn)
@@ -2187,19 +2590,20 @@ if (!isTRUE(run_multinomial)) {
         # mblogit predict returns an N x (#categories) matrix of probabilities
         pr = predict(mn_fit, newdata = nd, type = "response")
         pr = matrix(pr, ncol = length(lvls), dimnames = list(NULL, lvls))
-        # change 1: predictions are on the sampled scale when the routine
-        # category was subsampled; scale routine back up by 1/f and renormalize
+        # change 1: predictions are on the sampled scale when the reference
+        # category was subsampled; scale it back up by 1/f and renormalize
         # so the composition is population scale and still sums to 1.
         if (ss_mn$sampled) {
-          pr[, "routine_discharge"] = pr[, "routine_discharge"] / ss_mn$fraction
+          pr[, eol_ref] = pr[, eol_ref] / ss_mn$fraction
           pr = pr / rowSums(pr)
         }
         data.table(hospital_unit = h, disposition = lvls,
                    rs_probability = round(colMeans(pr), 5))
       }))
       comp[, `:=`(site = site_lowercase, model = "multinomial",
-                  standardization = if (exists("standardization_source")) standardization_source else "site_local",
-                  standard_pop_version = standard_pop_version,
+                  subgroup = "eol", reference_category = eol_ref,
+                  standardization = standardization_source_eol,
+                  standard_pop_version = standard_pop_eol_version,
                   n_standardization = nrow(std_dt),
                   control_sampled = ss_mn$sampled,
                   control_fraction = round(ss_mn$fraction, 6))]
@@ -2223,15 +2627,19 @@ if (!isTRUE(run_multinomial)) {
 
     # -- Option C consistency checks (protocol 2A.3 design) ---------------------
     # The multinomial and the binary GLMMs estimate the SAME contrasts (both use
-    # routine_discharge as reference), so they should agree. These run only where
-    # the binary GLMMs also fitted, i.e. multi-hospital sites; at a single- or
-    # two-hospital site neither model fits and the block is silently skipped.
+    # in_hospital_death_acute as reference), so they should agree. These run
+    # only where the binary GLMMs also fitted, i.e. multi-hospital sites; at a
+    # single- or two-hospital site neither model fits and the block is silently
+    # skipped.
     # BUGFIX 2026.08.27: guard formerly required exists("all_var_summary"),
     # which was never true here on a fresh run (assembled only in the export
     # section); it is now built above, before this block. The binary
-    # comparators are restricted to the full cohort spec, which is what the
+    # comparators are restricted to the primary eol spec, which is what the
     # multinomial is fit on (the old unfiltered merge would have duplicated
-    # rows across subgroups).
+    # rows across subgroups). NOTE 2026.10.14: the external_hospice_discharge
+    # binary runs at every hospital while the multinomial runs at class (a)
+    # hospitals only, so that comparison is like for like only where every
+    # hospital is class (a); the same_facility_hospice comparison always is.
     if (nrow(all_var_summary) > 0 && !is.null(mn_vc)) {
 
       # Check 1: sigma^2 ordering. mblogit is PQL (biased downward); lme4 is
@@ -2240,7 +2648,7 @@ if (!isTRUE(run_multinomial)) {
       # the expected PQL bias and points to a convergence problem, not a finding.
       mn_s2 = data.table(outcome = sub("~.*$", "", names(diag(mn_vc[[1]]))),
                          sigma2_multinomial = round(diag(mn_vc[[1]]), 4))
-      chk = merge(all_var_summary[subgroup == "full_cohort",
+      chk = merge(all_var_summary[subgroup == "eol",
                                   .(outcome, sigma2_binary = sigma2_hospital)],
                   mn_s2, by = "outcome")
       if (nrow(chk)) {
@@ -2264,13 +2672,13 @@ if (!isTRUE(run_multinomial)) {
         # Use sorted unique values, matching mblogit's internal factor coding.
         hosp_lv = if (is.factor(mn_dt$hospital_unit)) levels(mn_dt$hospital_unit)
                   else sort(unique(mn_dt$hospital_unit))
-        cats    = setdiff(levels(mn_dt$outcome_mn), "routine_discharge")
+        cats    = setdiff(levels(mn_dt$outcome_mn), eol_ref)
         if (nrow(re_mn) == length(hosp_lv) * length(cats)) {
           # rows are stacked hospital-within-category
           bl = data.table(hospital_unit = rep(hosp_lv, times = length(cats)),
                           outcome        = rep(cats, each = length(hosp_lv)),
                           blup_mn        = as.numeric(re_mn))
-          bin = all_hosp_profile[subgroup == "full_cohort",
+          bin = all_hosp_profile[subgroup == "eol",
                                  .(hospital_unit, outcome, blup_bin = ranef_intercept)]
           j = merge(bl, bin, by = c("hospital_unit", "outcome"))
           cors = j[, .(r = if (.N >= 3) cor(blup_mn, blup_bin) else NA_real_), by = outcome]
@@ -2310,9 +2718,9 @@ if (!isTRUE(run_multinomial)) {
     if (!is.null(mn_fit_fixed)) {
       mn_fitted     = TRUE
       mn_model_type = "multinomial_fixed"
-      record_timing("multinomial_fixed", "all_dispositions", "full_cohort",
+      record_timing("multinomial_fixed", "all_dispositions", "eol",
                     nrow(mn_dt),
-                    nrow(mn_dt[outcome_category != "routine_discharge"]),
+                    nrow(mn_dt[outcome_category != eol_ref]),
                     t_fit_mnf)
       mn_coefs = as.data.table(summary(mn_fit_fixed)$coefficients, keep.rownames = "term")
       setnames(mn_coefs, 1:5, c("term", "estimate", "se", "z_value", "p_value"))
@@ -2321,6 +2729,7 @@ if (!isTRUE(run_multinomial)) {
         ci_lower = round(exp(estimate - 1.96 * se), 3),
         ci_upper = round(exp(estimate + 1.96 * se), 3),
         model_type = "multinomial_fixed", site = site_lowercase,
+        subgroup = "eol", reference_category = eol_ref,
         control_sampled  = ss_mn$sampled,
         control_fraction = round(ss_mn$fraction, 6),
         n_reference_used = ss_mn$n_used
@@ -2361,8 +2770,11 @@ message(sprintf("  Saved aim2_multinomial_status (fitted = %s, model_type = %s).
 
 message("\n--- Analysis 2.5: ICC over pandemic eras ---")
 
-era_levels = levels(model_base$pandemic_period)
-era_outcomes = c("in_hospital_death_acute", "same_facility_hospice_death")
+# CHANGED 2026.10.14: refits run inside the END OF LIFE cohort, each outcome
+# vs in hospital death, mirroring the primary eol fits (same facility hospice
+# at class (a) hospitals only).
+era_levels = levels(model_eol$pandemic_period)
+era_outcomes = c("same_facility_hospice", "external_hospice_discharge")
 
 # BUGFIX 2026.08.27 (era refits silently produced no output):
 #   (a) formula_glmm carries pandemic_period as a fixed effect. Within a single
@@ -2386,21 +2798,29 @@ era_ranef_list   = list()
 if (!isTRUE(run_era_models)) {
   message("  DISABLED by run_era_models = FALSE (recorded in aim2a3_run_config).")
 } else for (era in era_levels) {
-  era_dt  = model_base[pandemic_period == era]
-  era_ref = era_dt[outcome_category == "routine_discharge"]
+  era_dt  = model_eol[pandemic_period == era]
+  era_ref = era_dt[outcome_category == eol_ref]
   if (nrow(era_dt) < 100 || nrow(era_ref) < 50 || uniqueN(era_dt$hospital_unit) < 3) {
     message(sprintf("    %s: too small — skipping.", era))
     next
   }
   for (out in era_outcomes) {
-    od = era_dt[outcome_category == out]
-    if (nrow(od) < 20) {
-      message(sprintf("    %s / %s: only %d events — skipping.", era, out, nrow(od)))
+    # protocol §3.4.4: same facility hospice conditional on class (a) hospitals,
+    # as in the primary fits; the reference group is restricted the same way
+    if (out %in% sf_outcomes && "pathway_class" %in% names(era_dt)) {
+      od = era_dt[pathway_class == "a_available_captured" & outcome_category == out]
+      er = era_ref[pathway_class == "a_available_captured"]
+    } else {
+      od = era_dt[outcome_category == out]
+      er = era_ref
+    }
+    if (nrow(od) < 20 || nrow(er) < 20) {
+      message(sprintf("    %s / %s: only %d events, %d reference -- skipping.", era, out, nrow(od), nrow(er)))
       next
     }
     # change 1: era refits use the same control subsampling (sigma^2 only is
     # reported from these fits, so no offset correction is needed)
-    ss_era = subsample_controls(era_ref, nrow(od))
+    ss_era = subsample_controls(er, nrow(od))
     if (ss_era$sampled)
       message(sprintf("    %s / %s: era reference subsampled to %s controls (f = %.5f).",
                       era, out, format(ss_era$n_used, big.mark = ","), ss_era$fraction))
@@ -2429,6 +2849,7 @@ if (!isTRUE(run_era_models)) {
       s2 = as.data.table(VarCorr(fit))[grp == "hospital_unit", vcov]
       re = ranef(fit)$hospital_unit
       list(summary = data.table(pandemic_period = era, outcome = out,
+                                subgroup = "eol", reference_category = eol_ref,
                                 sigma2_hospital = round(s2, 4), icc = round(s2/(s2 + pi^2/3), 4),
                                 n_hospitals = uniqueN(md$hospital_unit), site = site_lowercase),
            ranef = data.table(hospital_unit = rownames(re),
@@ -2497,7 +2918,8 @@ if (nrow(icc_summary) > 0) {
 
 message("\n--- Assembling results ---")
 
-all_results = c(full_results, lst_results, icu_results, oneadm_results)
+all_results = c(eol_results, eol_lst_results, eol_icu_results, eol_early_results,
+                incidence_results, terminal_results)
 
 # coefficients
 all_coefs = rbindlist(
@@ -2539,9 +2961,9 @@ message("==================================\n")
 
 # --- Print key fixed effects ---
 
-message("========== KEY FIXED EFFECTS (full cohort, ORs) ==========")
+message("========== KEY FIXED EFFECTS (end of life cohort, ORs vs in hospital death) ==========")
 key_terms = c("age_centered", "icu_flag", "elix_centered", "apache2_centered")
-fc_coefs = all_coefs[subgroup == "full_cohort" & term %in% key_terms]
+fc_coefs = all_coefs[subgroup == "eol" & term %in% key_terms]
 if (nrow(fc_coefs) > 0) {
   for (out in unique(fc_coefs$outcome)) {
     message(sprintf("\n  Outcome: %s", out))
@@ -2632,6 +3054,46 @@ if (nrow(all_ranef) > 0) {
   message("  Saved aim2a3_hospital_ranef.")
 }
 
+# ADDED 2026.10.14: concordance of the end of life (disposition defined) and
+# terminal (vital status defined) hospital effects at death linked sites.
+# Per outcome: the two sigma^2 and the correlation of the hospital random
+# intercepts across the two cohorts. High rank correlation means disposition
+# defined membership is not distorting the primary results; low correlation
+# means it is, and the terminal cohort becomes the one to read. Needs a GLMM
+# in both cohorts, so it is absent below the 3 hospital floor.
+terminal_label = sprintf("terminal_%dd", terminal_death_window_days)
+if (!is.null(model_term) && nrow(all_ranef) > 0 &&
+    all(c("eol", terminal_label) %in% all_ranef$subgroup)) {
+  conc = merge(all_ranef[subgroup == "eol",
+                         .(hospital_unit, outcome, u_eol = ranef_intercept)],
+               all_ranef[subgroup == terminal_label,
+                         .(hospital_unit, outcome, u_terminal = ranef_intercept)],
+               by = c("hospital_unit", "outcome"))
+  conc = conc[, .(n_hospitals  = .N,
+                  spearman_rho = if (.N >= 4) round(cor(u_eol, u_terminal, method = "spearman"), 3) else NA_real_,
+                  pearson_r    = if (.N >= 4) round(cor(u_eol, u_terminal), 3) else NA_real_),
+              by = outcome]
+  vs2 = all_var_summary[subgroup %in% c("eol", terminal_label),
+                        .(outcome, subgroup, sigma2_hospital)]
+  if (nrow(vs2)) {
+    vs2 = dcast(vs2, outcome ~ subgroup, value.var = "sigma2_hospital")
+    setnames(vs2, old = c("eol", terminal_label), new = c("sigma2_eol", "sigma2_terminal"),
+             skip_absent = TRUE)
+    conc = merge(conc, vs2, by = "outcome", all.x = TRUE)
+  }
+  conc[, `:=`(site = site_lowercase, reference_category = eol_ref,
+              terminal_death_window_days = terminal_death_window_days)]
+  fwrite(conc, shareable_path(
+    paste0("aim2a3_eol_terminal_concordance_", site_lowercase, "_", today, ".csv")))
+  message("  Saved aim2a3_eol_terminal_concordance (end of life vs terminal hospital effects).")
+  for (i in seq_len(nrow(conc)))
+    message(sprintf("    %-28s Spearman rho = %s over %d hospitals",
+                    conc$outcome[i], format(conc$spearman_rho[i]), conc$n_hospitals[i]))
+  rm(conc, vs2)
+} else if (!is.null(model_term)) {
+  message("  Concordance table skipped: need a GLMM (3+ hospitals) in both the eol and terminal cohorts.")
+}
+
 # change 2: per model timing (always on) — one row per completed fit
 if (length(fit_timings) > 0) {
   timing_dt = rbindlist(fit_timings, fill = TRUE)
@@ -2677,13 +3139,16 @@ message("  Saved intermediate covariates (covariates_aim2a3).")
 
 # cleanup ----------------------------------------------------------------------
 
-rm(cohort, cohort_all, model_base, ref_group,
+rm(cohort, cohort_all, model_base, model_eol, ref_group,
    analytic_summary, dx_tab,
-   all_results, full_results, lst_results, icu_results, oneadm_results,
+   all_results, eol_results, eol_lst_results, eol_icu_results, eol_early_results,
+   incidence_results, terminal_results,
    all_coefs, all_icc, all_ranef,
-   outcomes_to_model, formula_fixed, formula_glmm, base_rhs)
+   eol_outcomes, incidence_outcomes, terminal_outcomes,
+   formula_fixed, formula_glmm, base_rhs)
 
-suppressWarnings(rm(all_var_summary, all_hosp_profile,
+suppressWarnings(rm(all_var_summary, all_hosp_profile, model_term, mn_dt,
+                    std_frame_eol, std_margins, terminal_label,
                     course_results, course_coefs, course_icc,
                     formula_fixed_course, formula_glmm_course, course_rhs))
 

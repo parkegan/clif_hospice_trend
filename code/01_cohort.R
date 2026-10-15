@@ -24,17 +24,52 @@
 # primary cohort to avoid collider bias (see protocol §1.7).
 
 
-# Last updated bpe 27.05.2026
+# Last updated bpe 26.10.15: ENCOUNTER STITCHING (protocol 3.5.1 and 3.4.1,
+# the linked encounter rule). Some sites record the move to inpatient hospice
+# as a NEW encounter rather than a location segment inside the acute stay
+# (UMN does; their 2,047 hospice encounters all begin in a hospice coded
+# location, so under the old logic every one was excluded as admitted from
+# hospice, the acute stays kept no hospice ADT, and same facility counts
+# stayed at zero even after their ADT fix). With stitch_hospice_encounters
+# TRUE (the default), a hospice encounter that begins within 24 hours of a
+# same hospital, same patient discharge to hospice is FOLDED INTO that acute
+# episode: the acute encounter carries the same facility transition (flag,
+# transition time = the continuation encounter's admission, and death
+# ascertained from the continuation encounter where the patient table has no
+# death date), and the continuation encounter is removed as its own cohort
+# row, so one episode no longer yields an external hospice row plus an
+# excluded row. Stitched acute rows carry stitched_sf_transition = 1 for
+# provenance (chart validation should oversample these). At a site with the
+# within encounter pattern (OHSU) the stitcher finds no pairs and nothing
+# changes. Setting the switch FALSE restores the previous behavior exactly
+# (the 24 hour exception keeps the continuation as its own cohort row).
+#
+# Also 26.10.15: CCN FALLBACK for the shareable hospital summaries. The CCN
+# join previously dropped every admission whose hospital_id was absent from
+# the map, which at OHSU produced a header only hospital_summary in every
+# run since 260716 (map ids did not match ADT ids). Section 8 now ALWAYS
+# writes the summaries: mapped hospitals aggregate by CCN as before,
+# unmapped hospitals fall back to their raw ADT hospital_id (mirroring 04's
+# hospital_unit fallback so 01 summaries and 04 model outputs share keys),
+# a hospital_unit_type column records which key each row carries, and any
+# unmapped hospital raises a qi_flag instead of a console warning.
+#
+# Previous update bpe 27.05.2026
 
 
 # 0. source setup --------------------------------------------------------------
 
 source(file.path(here::here("code"), "00_setup.R"))
 
+# Encounter stitching switch (2026.10.15). TRUE implements the protocol's
+# linked encounter rule; FALSE restores the pre 26.10.15 behavior. See the
+# header note.
+stitch_hospice_encounters = TRUE
+
 
 # 1. Adult pts within study window ---------------------------------------------
 
-hosp = 
+hosp =
   data_list[["hospitalization"]] |>
   dplyr::filter(
     admission_dttm >= start_date,
@@ -52,7 +87,7 @@ hosp =
   as.data.table()
 
 n_total = nrow(hosp)
-message(sprintf("Total adult hospitalizations in study window: %s", 
+message(sprintf("Total adult hospitalizations in study window: %s",
                 format(n_total, big.mark = ",")))
 
 
@@ -71,7 +106,7 @@ n_excl_date_order = n_before_order - nrow(hosp)
 n_excl_los = n_excl_missing_dates + n_excl_date_order
 
 n_base = nrow(hosp)
-message(sprintf("After LOS exclusions: %s (removed %s missing dates, %s admit > discharge)", 
+message(sprintf("After LOS exclusions: %s (removed %s missing dates, %s admit > discharge)",
                 format(n_base, big.mark = ","),
                 format(n_excl_missing_dates, big.mark = ","),
                 format(n_excl_date_order, big.mark = ",")))
@@ -80,18 +115,18 @@ message(sprintf("After LOS exclusions: %s (removed %s missing dates, %s admit > 
 # 2. ADT — identify hospice location and first ADT location -------------------
 
 # ADT for relevant encounters
-hosp_ids_arrow = 
+hosp_ids_arrow =
   arrow::arrow_table(
   data.frame(hospitalization_id = unique(hosp$hospitalization_id))
 )
 
-adt = 
+adt =
   data_list[["adt"]] |>
   dplyr::semi_join(hosp_ids_arrow, by = "hospitalization_id") |>
-  dplyr::select(hospitalization_id, 
-                hospital_id, 
-                location_category, 
-                in_dttm, 
+  dplyr::select(hospitalization_id,
+                hospital_id,
+                location_category,
+                in_dttm,
                 out_dttm) |>
   dplyr::collect() |>
   as.data.table()
@@ -133,7 +168,7 @@ message(sprintf("  Any ICU admission: %s", format(n_icu, big.mark = ",")))
 ## 2b. Any hospice ADT location -----------------------------------------------
 # Used for same-facility hospice transition detection
 
-# Note: OHSU stopped their inpatient hospice in 2022(?) 
+# Note: OHSU stopped their inpatient hospice in 2022(?)
 # so will need buddy code site to have an inpatient hospice for checking this work
 
 adt_hospice = adt[
@@ -305,15 +340,25 @@ hosp = merge(hosp, adt_first, by = "hospitalization_id", all.x = TRUE)
 hosp[, excl_hospice_admit := fifelse(
   first_location == "hospice", 1L, 0L, na = 0L
 )]
+hosp[, stitched_continuation := 0L]
 
-# 24-hour re-admit exception (§3.4.1): a patient discharged to hospice, then
+# 24-hour re-admit rule (§3.4.1, §3.5.1): a patient discharged to hospice, then
 # admitted to the SAME facility's hospice within 24h, is a same-facility
 # transition (continuation of the same episode), NOT an admitted-from-hospice
 # patient. Identify these by checking each hospice-admit encounter for a prior
 # encounter at the same hospital with hospice discharge ending within 24h.
+#
+# STITCHING (2026.10.15): with stitch_hospice_encounters TRUE the linked pair
+# is FOLDED into one episode. The continuation encounter stays out of the
+# cohort (it is the hospice stay, not an index admission), its link is kept in
+# stitch_map, and section 4b2 moves the same facility transition onto the
+# acute encounter. With the switch FALSE the previous behavior applies: the
+# continuation encounter is merely unflagged and enters the cohort as its own
+# row while the acute encounter remains an external hospice discharge.
 
 hospice_admit_ids = hosp[excl_hospice_admit == 1L, hospitalization_id]
 
+stitch_map = NULL
 if (length(hospice_admit_ids) > 0) {
   # candidate prior encounters: same patient, hospice discharge
   prior_disch = hosp[
@@ -336,80 +381,60 @@ if (length(hospice_admit_ids) > 0) {
       as.numeric(difftime(admission_dttm, prior_discharge_dttm, units = "hours")) <= 24
   ]
 
-  reclassify_ids = unique(readmit_check$hospitalization_id)
+  if (isTRUE(stitch_hospice_encounters)) {
 
-  if (length(reclassify_ids) > 0) {
-    hosp[hospitalization_id %in% reclassify_ids, excl_hospice_admit := 0L]
-    message(sprintf("  24h re-admit exception: %s encounters reclassified as same-facility transitions",
-                    format(length(reclassify_ids), big.mark = ",")))
+    if (nrow(readmit_check) > 0) {
+      # one acute parent per continuation: the prior encounter whose hospice
+      # discharge is CLOSEST before the continuation's admission
+      setorder(readmit_check, hospitalization_id, -prior_discharge_dttm)
+      stitch_map = readmit_check[, .SD[1], by = hospitalization_id]
+      # one continuation per acute parent: the EARLIEST continuation admission
+      # (a later second hospice encounter in a chain is left unstitched and
+      # remains excluded as admitted from hospice; chains are rare and the
+      # first continuation carries the transition)
+      setorder(stitch_map, prior_hid, admission_dttm)
+      stitch_map = stitch_map[, .SD[1], by = prior_hid]
+      stitch_map = stitch_map[, .(acute_hid          = prior_hid,
+                                  hospice_hid        = hospitalization_id,
+                                  hospice_admit_dttm = admission_dttm)]
+      hosp[hospitalization_id %in% stitch_map$hospice_hid,
+           stitched_continuation := 1L]
+      message(sprintf("  Encounter stitching: %s hospice continuation encounters linked to %s acute episodes (folded, not cohort rows)",
+                      format(nrow(stitch_map), big.mark = ","),
+                      format(uniqueN(stitch_map$acute_hid), big.mark = ",")))
+    } else {
+      message("  Encounter stitching: ON, but no linkable acute to hospice continuation pairs found at this site")
+    }
+
+  } else {
+
+    reclassify_ids = unique(readmit_check$hospitalization_id)
+    if (length(reclassify_ids) > 0) {
+      hosp[hospitalization_id %in% reclassify_ids, excl_hospice_admit := 0L]
+      message(sprintf("  24h re-admit exception (stitching OFF): %s encounters reclassified as same-facility transitions",
+                      format(length(reclassify_ids), big.mark = ",")))
+    }
+    suppressWarnings(rm(reclassify_ids))
   }
+
   rm(prior_disch, this_admit, readmit_check)
 }
 
 rm(adt_first)
 
-n_excl_hospice = sum(hosp$excl_hospice_admit == 1L)
+# continuation encounters are excluded from the cohort but are NOT community
+# admitted from hospice patients, so the two counts are tracked separately
+n_stitched_cont = sum(hosp$stitched_continuation == 1L)
+n_excl_hospice  = sum(hosp$excl_hospice_admit == 1L & hosp$stitched_continuation == 0L)
 
 hosp[, in_cohort := fifelse(excl_hospice_admit == 0L, 1L, 0L)]
 
 n_cohort = sum(hosp$in_cohort == 1L)
 
 message(sprintf("  Excluded — admitted from hospice: %s", format(n_excl_hospice, big.mark = ",")))
-
-
-# ---- minimum hospital contribution -------------------------------------------
-# Hospitals contributing fewer than min_hospital_encounters to the cohort are
-# removed from it entirely. Two reasons. Statistically, a hospital of a few dozen
-# encounters still receives a random intercept in 04, along with a
-# risk-standardized probability, a reliability, and a rank interval, and it
-# inflates apparent between-hospital variation while carrying almost no
-# information. For disclosure, per-hospital rates on a denominator that small are
-# what cell suppression exists to prevent.
-#
-# This is a NETWORK constant. It must be identical at every site and is not a
-# site-tunable setting.
-#
-# Applied at hospital_id grain, because that is the unit at which a facility
-# contributes data and bears disclosure risk. Where several hospital_ids later
-# collapse to one CCN (§8b), the threshold has already been applied to each
-# component separately, which is the conservative direction.
-min_hospital_encounters = 1000L
-
-hosp[, excl_small_hospital := 0L]
-
-hosp_contrib = hosp[in_cohort == 1L, .(n_encounters = .N),
-                    by = hospital_id][order(n_encounters)]
-small_hospitals = hosp_contrib[n_encounters < min_hospital_encounters, hospital_id]
-
-if (length(small_hospitals) > 0) {
-  hosp[in_cohort == 1L & hospital_id %in% small_hospitals, excl_small_hospital := 1L]
-  hosp[excl_small_hospital == 1L, in_cohort := 0L]
-
-  message(sprintf("  Excluded — %d hospital(s) contributing < %s cohort encounters:",
-                  length(small_hospitals), format(min_hospital_encounters, big.mark = ",")))
-  drop_tbl = hosp_contrib[n_encounters < min_hospital_encounters]
-  for (i in seq_len(nrow(drop_tbl)))
-    message(sprintf("      %-24s %s encounters", drop_tbl$hospital_id[i],
-                    format(drop_tbl$n_encounters[i], big.mark = ",")))
-
-  # named list is site-local and stays local: hospital_id is a facility name at
-  # some sites, and every shareable output in this study is keyed on CCN.
-  # The encounter count reaches the network through the exclusion table below.
-  save_output(cbind(site = site_lowercase, drop_tbl,
-                    threshold = min_hospital_encounters),
-              "hospitals_excluded_small", shareable = FALSE)
-  rm(drop_tbl)
-}
-
-n_excl_small_hosp = sum(hosp$excl_small_hospital == 1L)
-n_cohort          = sum(hosp$in_cohort == 1L)
-rm(hosp_contrib, small_hospitals)
-
-message(sprintf("  Excluded — encounters at those hospitals: %s",
-                format(n_excl_small_hosp, big.mark = ",")))
-message(sprintf("PRIMARY COHORT: %s hospitalizations across %d hospitals",
-                format(n_cohort, big.mark = ","),
-                hosp[in_cohort == 1L, uniqueN(hospital_id)]))
+if (n_stitched_cont > 0)
+  message(sprintf("  Folded — same facility continuation encounters: %s", format(n_stitched_cont, big.mark = ",")))
+message(sprintf("PRIMARY COHORT: %s hospitalizations", format(n_cohort, big.mark = ",")))
 
 
 # 4. Outcomes ------------------------------------------------------------------
@@ -482,52 +507,111 @@ hosp[is.na(hospice_location_flag), hospice_location_flag := 0L]
 rm(adt_hospice, adt)
 
 
+## 4b2. apply encounter stitching to the acute episodes (2026.10.15) -----------
+# Each stitched pair moves the same facility transition onto the ACUTE
+# encounter: the hospice location flag turns on, the transition time becomes
+# the continuation encounter's admission (feeding hospice_transition_dttm in
+# 4d and therefore the Aim 1 clock), and where the patient table carries no
+# death date, a continuation encounter that itself ended in death supplies
+# one (sites without death index linkage would otherwise classify every
+# stitched episode as alive at 30 days). The acute encounter's discharge
+# disposition is already hospice (the stitch required it), so classification
+# in 4c routes it to a same facility outcome.
+
+hosp[, stitched_sf_transition := 0L]
+
+if (!is.null(stitch_map) && nrow(stitch_map) > 0) {
+
+  cont_info = hosp[hospitalization_id %in% stitch_map$hospice_hid,
+                   .(hospice_hid        = hospitalization_id,
+                     cont_discharge_cat = tolower(trimws(discharge_category)),
+                     cont_discharge_dttm = discharge_dttm)]
+  stitch_full = merge(stitch_map, cont_info, by = "hospice_hid")
+
+  hosp[stitch_full, on = .(hospitalization_id = acute_hid), `:=`(
+    stitched_sf_transition = 1L,
+    hospice_location_flag  = 1L,
+    hospice_in_dttm        = fifelse(is.na(hospice_in_dttm),
+                                     i.hospice_admit_dttm,
+                                     pmin(hospice_in_dttm, i.hospice_admit_dttm)),
+    cont_discharge_cat     = i.cont_discharge_cat,
+    cont_discharge_dttm    = i.cont_discharge_dttm
+  )]
+
+  # death during the continuation encounter, for sites without death linkage
+  n_death_from_cont = hosp[stitched_sf_transition == 1L & is.na(death_dttm) &
+                             cont_discharge_cat == "expired", .N]
+  if (n_death_from_cont > 0) {
+    hosp[stitched_sf_transition == 1L & is.na(death_dttm) &
+           cont_discharge_cat == "expired",
+         death_dttm := cont_discharge_dttm]
+  }
+
+  # recompute the discharge to death interval for the stitched acute rows
+  # (their death_dttm may have just been filled)
+  hosp[stitched_sf_transition == 1L,
+       days_discharge_to_death := as.numeric(
+         difftime(death_dttm, discharge_dttm, units = "days"))]
+
+  message(sprintf("  Encounter stitching: %s acute episodes now carry a same facility transition%s",
+                  format(nrow(stitch_full), big.mark = ","),
+                  if (n_death_from_cont > 0)
+                    sprintf(" (%s deaths ascertained from the continuation encounter)",
+                            format(n_death_from_cont, big.mark = ","))
+                  else ""))
+
+  hosp[, c("cont_discharge_cat", "cont_discharge_dttm") := NULL]
+  rm(cont_info, stitch_full)
+  suppressWarnings(rm(n_death_from_cont))
+}
+
+
 ## 4c. classify outcomes -------------------------------------------------------
 
 hosp[, discharge_cat_lower := tolower(trimws(discharge_category))]
 
 hosp[, outcome_category := fcase(
-  
+
   # 2. In-hospital death on acute status (no hospice location during stay)
   discharge_cat_lower == "expired" & hospice_location_flag == 0L,
   "in_hospital_death_acute",
-  
+
   # 3. In-hospital death with hospice location → same-facility hospice death
   discharge_cat_lower == "expired" & hospice_location_flag == 1L,
   "same_facility_hospice_death",
-  
+
   # 3. Discharged to hospice, had hospice ADT location (same-facility), died ≤30d
   discharge_cat_lower == "hospice" & hospice_location_flag == 1L &
     !is.na(death_dttm) & days_discharge_to_death >= 0 & days_discharge_to_death <= 30,
   "same_facility_hospice_death",
-  
+
   # 4. Same-facility hospice, alive at 30 days or no death recorded
   discharge_cat_lower == "hospice" & hospice_location_flag == 1L &
     (is.na(death_dttm) | days_discharge_to_death > 30 | days_discharge_to_death < 0),
   "same_facility_hospice_alive",
-  
+
   # 5. External hospice discharge (hospice disposition, no hospice ADT location)
   discharge_cat_lower == "hospice" & hospice_location_flag == 0L,
   "external_hospice_discharge",
-  
+
   # 6. Transfer to another acute care facility. CLIF 2.1.0 codes hospital-to-
   #    hospital transfers as discharge_category = "Acute Care Hospital" (which
   #    contains no "transfer" substring); the grepl() is retained as a safety net
   #    for sites whose discharge_category still holds a raw transfer string.
   discharge_cat_lower == "acute care hospital" | grepl("transfer", discharge_cat_lower),
   "transfer_acute_facility",
-  
+
   # 7. AMA / left against medical advice
   grepl("ama|against medical advice|left against", discharge_cat_lower),
   "other_ama",
-  
+
   # 1. Routine discharge: alive, non-hospice, non-transfer
   discharge_cat_lower != "expired" & discharge_cat_lower != "hospice" &
     discharge_cat_lower != "acute care hospital" &
     !grepl("transfer", discharge_cat_lower) &
     !grepl("ama|against medical advice", discharge_cat_lower),
   "routine_discharge",
-  
+
   # fallback
   default = "other_ama"
 )]
@@ -536,6 +620,7 @@ hosp[, outcome_category := fcase(
 ## 4d. time from hospice transition to death (hours) --------------------------
 
 # For same-facility hospice: use hospice ADT in_dttm
+# (for stitched episodes this is the continuation encounter's admission)
 # For external hospice: use discharge_dttm as proxy for transition
 
 hosp[, hospice_transition_dttm := fcase(
@@ -744,9 +829,7 @@ message(sprintf("    Missing admission or discharge datetime:      %s", format(n
 message(sprintf("    Admission datetime > discharge datetime:      %s", format(n_excl_date_order, big.mark = ",")))
 message(sprintf("  Excluded — missing hospital_id:                 %s", format(n_excl_missing_hid, big.mark = ",")))
 message(sprintf("  Excluded — admitted from hospice:               %s", format(n_excl_hospice, big.mark = ",")))
-message(sprintf("  Excluded — hospital under %s encounters:      %s",
-                format(min_hospital_encounters, big.mark = ","),
-                format(n_excl_small_hosp, big.mark = ",")))
+message(sprintf("  Folded — same facility continuations:           %s", format(n_stitched_cont, big.mark = ",")))
 message(sprintf("  FINAL PRIMARY COHORT:                           %s", format(n_cohort, big.mark = ",")))
 message(sprintf("    With any ICU admission:                       %s (%4.1f%%)",
                 format(sum(cohort$icu_flag == 1L), big.mark = ","),
@@ -754,6 +837,8 @@ message(sprintf("    With any ICU admission:                       %s (%4.1f%%)"
 message(sprintf("    With ED admission:                            %s (%4.1f%%)",
                 format(sum(cohort$ed_flag == 1L), big.mark = ","),
                 100 * sum(cohort$ed_flag == 1L) / n_cohort))
+message(sprintf("    Same facility transitions via stitching:      %s",
+                format(sum(cohort$stitched_sf_transition == 1L), big.mark = ",")))
 message("")
 message("Outcome distribution (primary cohort):")
 outcome_counts = cohort[, .N, by = outcome_category][order(-N)]
@@ -771,21 +856,22 @@ message("====================================\n")
 # Structured exclusion table for compilation across all sites.
 # Each row is one step in the sequential exclusion cascade.
 # "remaining" is the count after that step's exclusion is applied.
+# Step 4.5 counts hospice continuation encounters folded into their acute
+# episode by stitching; they leave the row count but not the episode count.
 
 exclusion_table = data.table(
   site           = site_lowercase,
-  step           = 1:6,
+  step           = c(1, 2, 3, 4, 4.5, 5),
   description    = c(
     "Adult (>=18) inpatient hospitalizations in study window",
     "Excluded: missing or invalid length of stay data",
     "Excluded: missing hospital_id (cannot place at a facility)",
     "Excluded: admitted from hospice",
-    sprintf("Excluded: hospital contributed < %s cohort encounters",
-            format(min_hospital_encounters, big.mark = ",")),
+    "Folded: same facility hospice continuation encounters (stitched into the acute episode)",
     "Final primary cohort"
   ),
   n_excluded     = c(0L, n_excl_los, n_excl_missing_hid, n_excl_hospice,
-                     n_excl_small_hosp, 0L),
+                     n_stitched_cont, 0L),
   n_remaining    = c(n_total,
                      n_total - n_excl_los,
                      n_total - n_excl_los - n_excl_missing_hid,
@@ -921,7 +1007,7 @@ save_output(
     discharge_category, death_dttm,
     ed_flag, icu_flag, icu_48h_flag, age_65_flag,
     imv_flag, vaso_flag, lst_any_flag,
-    hospice_location_flag, hospice_transition_dttm,
+    hospice_location_flag, hospice_transition_dttm, stitched_sf_transition,
     outcome_category, hours_transition_to_death, short_interval_death,
     days_discharge_to_death,
     admission_month, discharge_month, los_days,
@@ -933,8 +1019,10 @@ save_output(
 
 # admitted-from-hospice cohort (for exploratory analysis E.2)
 # These patients were excluded from the primary cohort but the protocol
-# asks to analyze them as a comparison group.
-hospice_admits = hosp[excl_hospice_admit == 1L]
+# asks to analyze them as a comparison group. Stitched continuation
+# encounters are NOT community admitted from hospice patients, so they are
+# excluded here too; their episode lives on the acute encounter.
+hospice_admits = hosp[excl_hospice_admit == 1L & stitched_continuation == 0L]
 n_hospice_admits = nrow(hospice_admits)
 message(sprintf("  Admitted-from-hospice cohort: %s encounters", format(n_hospice_admits, big.mark = ",")))
 
@@ -965,6 +1053,7 @@ rm(outcome_counts, exclusion_table, exclusion_detail,
    n_excl_los, n_excl_missing_dates, n_excl_date_order,
    n_excl_missing_hid, n_before_hid, n_missing_hid,
    n_imv, n_vaso, n_lst, death_linked_site, hosp_with_hospice_unit)
+suppressWarnings(rm(stitch_map, hospice_admit_ids, n_stitched_cont))
 gc()
 
 # 8. shareable CCN-level summary (for ohsu to compile) -------------------------
@@ -998,6 +1087,7 @@ local_summary = cohort[, .(
     "external_hospice_discharge"), na.rm = TRUE),
   n_sf_hospice = sum(outcome_category %in% c(
     "same_facility_hospice_death", "same_facility_hospice_alive"), na.rm = TRUE),
+  n_sf_stitched = sum(stitched_sf_transition == 1L, na.rm = TRUE),
   n_short_survival = sum(short_interval_death == 1L, na.rm = TRUE)
 ), by = hospital_id]
 
@@ -1006,13 +1096,17 @@ save_output(local_summary, "hospital_summary_by_hospital_id", shareable = FALSE)
 
 ## 8b. CCN-level aggregation -------------------------------------------------
 
+# CCN FALLBACK (2026.10.15): the shareable summaries are ALWAYS written.
+# Mapped hospitals aggregate by CCN as before; hospitals absent from the map
+# (or a wholly absent map) fall back to their raw ADT hospital_id, with
+# hospital_unit_type recording which key each row carries. This mirrors 04's
+# hospital_unit fallback, so the 01 summaries and the 04 model outputs stay
+# on the same hospital keys at a site whose map is broken or missing.
 if (is.null(hospital_medicare_map)) {
-  warning("No CCN map available — skipping shareable CCN-level summary. ",
-          "Add hospital_ccn_map.csv to <project_root>/reference/ and re-run.",
-          call. = FALSE)
-  
+  message("  No usable CCN map — hospital summaries will be keyed by raw ADT hospital_id.")
+  cohort_ccn = copy(cohort)
+  cohort_ccn[, medicare_id := NA_character_]
 } else {
-  
   # join CCN onto cohort
   cohort_ccn = merge(
     cohort,
@@ -1020,27 +1114,36 @@ if (is.null(hospital_medicare_map)) {
     by = "hospital_id",
     all.x = TRUE
   )
-  
-  # check for unmapped hospital_ids
+}
+
+  # unmapped hospitals fall back to their ADT hospital_id instead of dropping
   unmapped_hids = unique(cohort_ccn[is.na(medicare_id), hospital_id])
   n_unmapped_admissions = sum(is.na(cohort_ccn$medicare_id))
-  
-  if (length(unmapped_hids) > 0) {
-    warning(sprintf(
-      "%d hospital_id(s) in cohort not found in CCN map — %s admissions excluded from shareable summary:\n  %s\n  Add these to reference/hospital_ccn_map.csv to include them.",
-      length(unmapped_hids),
-      format(n_unmapped_admissions, big.mark = ","),
-      paste(unmapped_hids, collapse = ", ")
-    ), call. = FALSE)
+
+  if (length(unmapped_hids) > 0 && !is.null(hospital_medicare_map)) {
+    qi_flag(
+      "CCN map does not cover every hospital -- hospital_id fallback applied",
+      sprintf(paste0(
+        "%d hospital_id(s) in the cohort are not in reference/hospital_ccn_map.csv\n",
+        "(%s admissions): %s\n",
+        "Their hospital summary rows are keyed by the raw ADT hospital_id\n",
+        "(hospital_unit_type = hospital_id) instead of a CCN. Fix the map so these\n",
+        "hospitals aggregate and compare by CCN across the consortium."),
+        length(unmapped_hids),
+        format(n_unmapped_admissions, big.mark = ","),
+        paste(unmapped_hids, collapse = ", ")))
   }
-  
-  # aggregate at CCN level (drop unmapped rows)
-  ccn_summary = cohort_ccn[!is.na(medicare_id), .(
-    
+
+  cohort_ccn[, hospital_unit_type := fifelse(is.na(medicare_id), "hospital_id", "ccn")]
+  cohort_ccn[is.na(medicare_id), medicare_id := hospital_id]
+
+  # aggregate at CCN level (fallback rows aggregate by their hospital_id key)
+  ccn_summary = cohort_ccn[, .(
+
     # volume
     n_admissions = .N,
     n_hospital_ids_combined = uniqueN(hospital_id),
-    
+
     # outcome counts (multinomial)
     n_routine_discharge        = sum(outcome_category == "routine_discharge", na.rm = TRUE),
     n_in_hospital_death_acute  = sum(outcome_category == "in_hospital_death_acute", na.rm = TRUE),
@@ -1049,16 +1152,18 @@ if (is.null(hospital_medicare_map)) {
     n_external_hospice         = sum(outcome_category == "external_hospice_discharge", na.rm = TRUE),
     n_transfer_acute           = sum(outcome_category == "transfer_acute_facility", na.rm = TRUE),
     n_other_ama                = sum(outcome_category == "other_ama", na.rm = TRUE),
-    
+
     # hospice aggregates
     n_hospice_all = sum(outcome_category %in% c(
       "same_facility_hospice_death", "same_facility_hospice_alive",
       "external_hospice_discharge"), na.rm = TRUE),
     n_sf_hospice = sum(outcome_category %in% c(
       "same_facility_hospice_death", "same_facility_hospice_alive"), na.rm = TRUE),
-    
+
+    n_sf_stitched = sum(stitched_sf_transition == 1L, na.rm = TRUE),
+
     n_short_survival = sum(short_interval_death == 1L, na.rm = TRUE),
-    
+
     # covariates
     mean_age     = round(mean(age_at_admission, na.rm = TRUE), 1),
     pct_age_65   = round(100 * mean(age_65_flag == 1L, na.rm = TRUE), 1),
@@ -1067,12 +1172,12 @@ if (is.null(hospital_medicare_map)) {
     pct_ed_admit = round(100 * mean(ed_flag == 1L, na.rm = TRUE), 1),
     mean_los     = round(mean(los_days, na.rm = TRUE), 2),
     median_los   = round(median(los_days, na.rm = TRUE), 2)
-    
-  ), by = medicare_id]
-  
+
+  ), by = .(medicare_id, hospital_unit_type)]
+
   # site identifier
   ccn_summary[, site := site_lowercase]
-  
+
   # computed rates (per 1,000 admissions)
   ccn_summary[, `:=`(
     rate_hospice_all = round(1000 * n_hospice_all / n_admissions, 2),
@@ -1086,12 +1191,12 @@ if (is.null(hospital_medicare_map)) {
       n_hospice_all / n_in_hospital_death_acute,
       NA_real_), 3)
   )]
-  
+
   # reorder columns: identifiers first
-  id_cols = c("site", "medicare_id", "n_hospital_ids_combined")
+  id_cols = c("site", "medicare_id", "hospital_unit_type", "n_hospital_ids_combined")
   other_cols = setdiff(names(ccn_summary), id_cols)
   setcolorder(ccn_summary, c(id_cols, other_cols))
-  
+
   message("CCN-level summary:")
   for (i in seq_len(nrow(ccn_summary))) {
     h = ccn_summary[i]
@@ -1102,39 +1207,37 @@ if (is.null(hospital_medicare_map)) {
                     format(h$n_hospice_all, big.mark = ","),
                     format(h$n_transfer_acute, big.mark = ",")))
   }
-  
+
   save_output(ccn_summary, "hospital_summary",
               shareable = TRUE, subfolder = "aim2")
-  
+
   message("  Shareable CCN-level summary saved to shareable output.aim2/")
-  
-  
+
+
   ## 8c. Quarterly CCN-level summary (shareable) -----------------------------
   # Same outcome counts as the overall CCN summary, broken down by discharge
   # quarter for temporal trend analyses across the consortium.
   # Case-mix covariates are omitted (they're stable descriptors of the
   # hospital, not time-varying — they live in the overall summary).
-  
+
   message("Building quarterly CCN-level summary...")
-  
+
   # defensive: ensure discharge_quarter exists (in case cohort was loaded from
   # a parquet file saved before discharge_quarter was added to the save spec)
   if (!"discharge_quarter" %in% names(cohort)) {
     cohort[, discharge_quarter := floor_date(discharge_dttm, "quarter")]
   }
-  
-  # rebuild the CCN-joined cohort (we rm'd it above; cheap to redo)
-  cohort_ccn_q = merge(
-    cohort,
-    hospital_medicare_map[, .(hospital_id, medicare_id)],
-    by = "hospital_id",
-    all.x = TRUE
-  )
-  
+
+  # reuse the CCN-joined cohort from 8b (same fallback keys)
+  cohort_ccn_q = cohort_ccn
+  if (!"discharge_quarter" %in% names(cohort_ccn_q)) {
+    cohort_ccn_q[, discharge_quarter := floor_date(discharge_dttm, "quarter")]
+  }
+
   ccn_quarterly = cohort_ccn_q[!is.na(medicare_id) & !is.na(discharge_quarter), .(
-    
+
     n_admissions = .N,
-    
+
     n_routine_discharge        = sum(outcome_category == "routine_discharge", na.rm = TRUE),
     n_in_hospital_death_acute  = sum(outcome_category == "in_hospital_death_acute", na.rm = TRUE),
     n_sf_hospice_death         = sum(outcome_category == "same_facility_hospice_death", na.rm = TRUE),
@@ -1142,25 +1245,25 @@ if (is.null(hospital_medicare_map)) {
     n_external_hospice         = sum(outcome_category == "external_hospice_discharge", na.rm = TRUE),
     n_transfer_acute           = sum(outcome_category == "transfer_acute_facility", na.rm = TRUE),
     n_other_ama                = sum(outcome_category == "other_ama", na.rm = TRUE),
-    
+
     n_hospice_all = sum(outcome_category %in% c(
       "same_facility_hospice_death", "same_facility_hospice_alive",
       "external_hospice_discharge"), na.rm = TRUE),
     n_sf_hospice = sum(outcome_category %in% c(
       "same_facility_hospice_death", "same_facility_hospice_alive"), na.rm = TRUE),
-    
+
     n_short_survival = sum(short_interval_death == 1L, na.rm = TRUE)
-    
-  ), by = .(medicare_id, discharge_quarter)]
-  
+
+  ), by = .(medicare_id, hospital_unit_type, discharge_quarter)]
+
   # site identifier
   ccn_quarterly[, site := site_lowercase]
-  
+
   # quarter label (e.g., "2020 Q3") for human readability
   ccn_quarterly[, quarter_label := paste0(
     year(discharge_quarter), " Q", quarter(discharge_quarter)
   )]
-  
+
   # computed rates
   ccn_quarterly[, `:=`(
     rate_hospice_all = round(1000 * n_hospice_all / n_admissions, 2),
@@ -1174,13 +1277,13 @@ if (is.null(hospital_medicare_map)) {
       n_hospice_all / n_in_hospital_death_acute,
       NA_real_), 3)
   )]
-  
+
   # reorder columns
-  id_cols_q = c("site", "medicare_id", "discharge_quarter", "quarter_label")
+  id_cols_q = c("site", "medicare_id", "hospital_unit_type", "discharge_quarter", "quarter_label")
   other_cols_q = setdiff(names(ccn_quarterly), id_cols_q)
   setcolorder(ccn_quarterly, c(id_cols_q, other_cols_q))
   setorder(ccn_quarterly, medicare_id, discharge_quarter)
-  
+
   # report span
   message(sprintf("  Quarterly summary: %d CCN(s) × %d quarter(s) = %d rows",
                   uniqueN(ccn_quarterly$medicare_id),
@@ -1191,14 +1294,13 @@ if (is.null(hospital_medicare_map)) {
                   quarter(min(ccn_quarterly$discharge_quarter)),
                   year(max(ccn_quarterly$discharge_quarter)),
                   quarter(max(ccn_quarterly$discharge_quarter))))
-  
+
   save_output(ccn_quarterly, "hospital_summary_quarterly",
               shareable = TRUE, subfolder = "aim2")
-  
+
   message("  Shareable quarterly CCN summary saved to shareable output.aim2/")
-  
+
   rm(cohort_ccn, ccn_summary, cohort_ccn_q, ccn_quarterly)
-}
 
 
 rm(local_summary)

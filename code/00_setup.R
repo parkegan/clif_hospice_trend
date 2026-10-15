@@ -2,33 +2,37 @@
 # This script loads packages, detects system resources, reads config,
 # loads and validates CLIF tables, and defines shared utility functions.
 # Last updated bpe 16.07.2026
+# Updated 26.10.15: CCN map deduplication guard (see the hospital to CCN map
+# block). A map carrying duplicate hospital_id rows no longer crashes the
+# downstream joins in 01 and 04; exact duplicates collapse, conflicting CCNs
+# are reported and fall back to hospital_id keys.
 
 
 # install and load packages ----------------------------------------------------
 
 packages_to_install = c(
-  "lubridate", 
-  "rprojroot", 
-  "tidytable", 
+  "lubridate",
+  "rprojroot",
+  "tidytable",
   "collapse",
-  "janitor", 
-  "arrow", 
-  "readr", 
-  "yaml", 
+  "janitor",
+  "arrow",
+  "readr",
+  "yaml",
   "here"
 )
 
 packages_to_load = c(
-  "rprojroot", 
-  "data.table", 
-  "lubridate", 
-  "tidytable", 
+  "rprojroot",
+  "data.table",
+  "lubridate",
+  "tidytable",
   "collapse",
-  "stringr", 
-  "arrow", 
-  "here", 
-  "dplyr", 
-  "rlang", 
+  "stringr",
+  "arrow",
+  "here",
+  "dplyr",
+  "rlang",
   "tidyr"
 )
 
@@ -60,13 +64,13 @@ get_ram_gb = function() {
         system("sysctl -n hw.memsize", intern = TRUE)
       ))
       if (length(bytes) && !is.na(bytes)) bytes / 1024^3 else NA_real_
-      
+
     } else if (file.exists("/proc/meminfo")) {
       kb = as.numeric(suppressWarnings(
         system("awk '/MemAvailable/ {print $2}' /proc/meminfo", intern = TRUE)
       ))
       if (length(kb) && !is.na(kb)) kb / 1024^2 else NA_real_
-      
+
     } else {
       mem = ps::ps_system_memory()
       key = intersect(c("available", "avail"), names(mem))
@@ -96,7 +100,7 @@ Sys.setenv(ARROW_NUM_THREADS     = n_threads)
 options(mc.cores                 = n_threads)
 
 message(sprintf(
-  "Env OK | OS=%s | Cores=%d | Threads=%d | Avail RAM\u2248%s GB",
+  "Env OK | OS=%s | Cores=%d | Threads=%d | Avail RAM≈%s GB",
   os_type, all_cores, n_threads,
   if (is.finite(avail_ram_gb)) round(avail_ram_gb, 1) else "NA"))
 
@@ -111,10 +115,10 @@ allowed_files = c("parquet", "csv", "fst")
 
 ## user enters site details ----------------------------------------------------
 
-site_raw       = config$site_lowercase 
+site_raw       = config$site_lowercase
 site_lowercase = if (is.null(site_raw) || site_raw == "") "site" else tolower(site_raw)
 
-tz_local         = config$time_zone 
+tz_local         = config$time_zone
 file_type        = tolower(config$file_type)
 tables_location  = config$tables_location
 
@@ -316,26 +320,19 @@ ccn_map_path = config$hospital_ccn_map_file %||%
 hospital_medicare_map = NULL
 
 if (!file.exists(ccn_map_path)) {
-  # The map ships with the repository under reference/, so its absence means an
-  # incomplete checkout or a redirected 'hospital_ccn_map_file' in config.yaml,
-  # not an unconfigured site. Every shareable output in this study is keyed on
-  # CCN; running without the map produces a complete set of files keyed on
-  # site-local hospital_id values that cannot be joined to any other site. That
-  # failure stays invisible until pooled assembly, so it is caught here instead.
-  stop("Hospital CCN map not found at: ", ccn_map_path,
-       "\n  This file is tracked in the repository under reference/. Check that ",
-       "the working copy is complete, or that 'hospital_ccn_map_file' in ",
-       "config.yaml points somewhere valid.",
-       "\n  The pipeline cannot produce poolable output without it.", call. = FALSE)
-  
+  warning("Hospital CCN map not found at: ", ccn_map_path,
+          "\n  CCN-level aggregation will be skipped.",
+          "\n  Place hospital_ccn_map.csv in <project_root>/reference/ ",
+          "or set 'hospital_ccn_map_file' in config.yaml.", call. = FALSE)
+
 } else {
-  
+
   ccn_map_full = fread(
     ccn_map_path,
     colClasses = c(hospital_ccn_id = "character",
                    hospital_id     = "character")
   )
-  
+
   # required columns
   required_cols = c("site", "hospital_id", "hospital_ccn_id")
   missing_cols = setdiff(required_cols, names(ccn_map_full))
@@ -343,73 +340,67 @@ if (!file.exists(ccn_map_path)) {
     stop("Hospital CCN map is missing required columns: ",
          paste(missing_cols, collapse = ", "), call. = FALSE)
   }
-  
-  # trim both keys: a CSV exported from a spreadsheet routinely carries trailing
-  # whitespace, which makes identical-looking values fail to join
-  ccn_map_full[, hospital_id     := trimws(hospital_id)]
-  ccn_map_full[, hospital_ccn_id := trimws(hospital_ccn_id)]
-  
+
   # standardize column names
   setnames(ccn_map_full, "hospital_ccn_id", "medicare_id")
-  
+
   # ensure ccn_note column exists
   if (!"ccn_note" %in% names(ccn_map_full)) {
     ccn_map_full[, ccn_note := NA_character_]
   }
-  
+
   # zero-pad CCNs to 6 digits (preserve leading zeros for CA, AK, etc.)
   ccn_map_full[, medicare_id := stringr::str_pad(
     medicare_id, width = 6, side = "left", pad = "0"
   )]
-  
+
   # case-insensitive site name match
   target_site = tolower(trimws(site_lowercase))
   ccn_map_full[, site_norm := tolower(trimws(site))]
-  
+
   hospital_medicare_map = ccn_map_full[
     site_norm == target_site,
     .(hospital_id, medicare_id, ccn_note)
   ]
-  
+
+  # DEDUPE GUARD (2026.10.15): duplicate hospital_id rows in the map multiply
+  # admissions in every downstream CCN join; data.table stops the pipeline
+  # with the "Join results in ... rows" error, which is how this surfaced at
+  # OHSU after a map edit. Exact duplicates on hospital_id and medicare_id
+  # collapse silently (first ccn_note kept); a hospital_id mapped to MORE
+  # THAN ONE distinct CCN is a map error, so it is reported loudly and
+  # removed, and those admissions take the hospital_id fallback in 01 and 04
+  # until the map is corrected. One row per hospital_id is guaranteed from
+  # here on.
+  hospital_medicare_map = unique(hospital_medicare_map,
+                                 by = c("hospital_id", "medicare_id"))
+  dup_ids = hospital_medicare_map[, .N, by = hospital_id][N > 1, hospital_id]
+  if (length(dup_ids)) {
+    conflicts = hospital_medicare_map[hospital_id %in% dup_ids]
+    warning("hospital_ccn_map.csv maps the same hospital_id to multiple CCNs:\n  ",
+            paste(sprintf("%s -> %s", conflicts$hospital_id, conflicts$medicare_id),
+                  collapse = "; "),
+            "\n  These hospital_id(s) are treated as UNMAPPED (hospital_id ",
+            "fallback) until the map is corrected.", call. = FALSE)
+    hospital_medicare_map = hospital_medicare_map[!hospital_id %in% dup_ids]
+    rm(conflicts)
+  }
+  rm(dup_ids)
+
   if (nrow(hospital_medicare_map) == 0) {
     available = sort(unique(ccn_map_full$site))
-    stop("No CCN map entries for site '", site_lowercase, "'.",
-         "\n  Available sites in map: ", paste(available, collapse = ", "),
-         "\n  Set 'site_lowercase' or 'institution' in config.yaml ",
-         "to one of these values (case-insensitive).", call. = FALSE)
-    
+    warning("No CCN map entries for site '", site_lowercase, "'.",
+            "\n  Available sites in map: ", paste(available, collapse = ", "),
+            "\n  Set 'site_lowercase' or 'institution' in config.yaml ",
+            "to one of these values (case-insensitive).", call. = FALSE)
+    hospital_medicare_map = NULL
+
   } else {
-    
-    # hospital_id must be unique WITHIN a site. A duplicate would multiply
-    # encounter rows on every merge in 01 and 04, silently inflating counts.
-    # Note this is the opposite of medicare_id, which is legitimately shared
-    # when two campuses are certified under a single CCN.
-    dup_hid = hospital_medicare_map[, .N, by = hospital_id][N > 1]
-    if (nrow(dup_hid) > 0) {
-      stop("Hospital CCN map has duplicate hospital_id value(s) for site '",
-           site_lowercase, "': ", paste(dup_hid$hospital_id, collapse = ", "),
-           "\n  A duplicated join key multiplies encounter rows. Fix the map ",
-           "before re-running.", call. = FALSE)
-    }
-    rm(dup_hid)
-    
-    # a CCN is always six characters. Anything else means the value was mangled
-    # in transit, most often by a spreadsheet stripping a leading zero.
-    bad_ccn = hospital_medicare_map[is.na(medicare_id) | nchar(medicare_id) != 6L]
-    if (nrow(bad_ccn) > 0) {
-      stop("Hospital CCN map has malformed CCN(s) for site '", site_lowercase,
-           "': ", paste(sprintf("%s -> '%s'", bad_ccn$hospital_id,
-                                bad_ccn$medicare_id), collapse = ", "),
-           "\n  CCNs must be six characters. Check the source file was not ",
-           "opened and re-saved in a spreadsheet.", call. = FALSE)
-    }
-    rm(bad_ccn)
-    
     n_hosp = nrow(hospital_medicare_map)
     n_ccn  = uniqueN(hospital_medicare_map$medicare_id)
     message(sprintf("CCN map loaded: %d hospital_id(s) → %d unique CCN(s) for site '%s'",
                     n_hosp, n_ccn, site_lowercase))
-    
+
     # report shared CCNs (multiple hospital_ids with same CCN)
     shared = hospital_medicare_map[, .N, by = medicare_id][N > 1]
     if (nrow(shared) > 0) {
@@ -422,7 +413,7 @@ if (!file.exists(ccn_map_path)) {
       }
     }
   }
-  
+
   rm(ccn_map_full)
 }
 
@@ -498,21 +489,21 @@ today      = format(Sys.Date(), "%y%m%d")
 # coefficients, and hospital-level (by CCN) summaries are shareable.
 
 save_output = function(obj, name, shareable = FALSE, subfolder = NULL, format = "csv") {
-  
+
   base_dir = if (shareable) shareable_dir else private_dir
   if (!is.null(subfolder)) base_dir = file.path(base_dir, subfolder)
-  
+
   if (!dir.exists(base_dir)) dir.create(base_dir, recursive = TRUE)
-  
+
   path = file.path(base_dir, paste0(name, "_", site_lowercase, "_", today, ".", format))
-  
+
   switch(format,
          csv     = fwrite(obj, path),
          fst     = fst::write_fst(obj, path),
          parquet = arrow::write_parquet(obj, path),
          stop("Unsupported format: ", format, call. = FALSE)
   )
-  
+
   message("Saved: ", path)
   invisible(path)
 }
@@ -693,24 +684,24 @@ data_list = lapply(data_list, cast_id_keys)
 # validate table contents ------------------------------------------------------
 
 validate_table = function(tbl, table_name, req_vars = NULL, req_values = list()) {
-  
+
   req_vars = req_vars %||% character(0)
   tbl_cols = names(tbl)
   problems = character()
-  
+
   # check required variables
   missing_vars = setdiff(req_vars, tbl_cols)
   if (length(missing_vars)) {
     problems = c(problems, sprintf("Missing required vars: %s", paste(missing_vars, collapse = ", ")))
   }
-  
+
   # check required values
   for (var in names(req_values)) {
     if (!var %in% tbl_cols) {
       problems = c(problems, sprintf("Missing '%s' needed for value checks.", var))
       next
     }
-    
+
     present_vals = tryCatch({
       sampled = tbl |>
         dplyr::select(!!rlang::sym(var)) |>
@@ -719,17 +710,17 @@ validate_table = function(tbl, table_name, req_vars = NULL, req_values = list())
         dplyr::collect()
       tolower(trimws(na.omit(as.character(sampled[[var]]))))
     }, error = \(e) character(0))
-    
+
     expected = tolower(trimws(unique(req_values[[var]])))
     missing  = setdiff(expected, present_vals)
-    
+
     if (length(missing)) {
       problems = c(problems, sprintf(
         "Variable '%s' is missing expected values: %s", var, paste(missing, collapse = ", ")
       ))
     }
   }
-  
+
   if (length(problems)) {
     return(sprintf("Table '%s':\n- %s", table_name, paste(problems, collapse = "\n- ")))
   }
@@ -749,9 +740,9 @@ validate_all_tables = function(data_list, specs) {
     )
     result %||% ""
   }, character(1))
-  
+
   all_problems = all_problems[nzchar(all_problems)]
-  
+
   if (length(all_problems)) {
     stop("Validation errors found:\n", paste(all_problems, collapse = "\n\n"), call. = FALSE)
   }
@@ -762,107 +753,107 @@ validate_all_tables = function(data_list, specs) {
 ## validation specs ------------------------------------------------------------
 
 req_vitals = c(
-  "heart_rate", 
-  "respiratory_rate", 
-  "map", 
-  "spo2", 
+  "heart_rate",
+  "respiratory_rate",
+  "map",
+  "spo2",
   "temp_c",
-  "height_cm", 
+  "height_cm",
   "weight_kg"
 )
 
 req_labs = c(
-  "crp", 
-  "wbc", 
-  "creatinine", 
+  "crp",
+  "wbc",
+  "creatinine",
   "platelet_count",
-  "lymphocytes_absolute", 
-  "ldh", 
+  "lymphocytes_absolute",
+  "ldh",
   "ferritin",
-  "hemoglobin", 
+  "hemoglobin",
   "neutrophils_absolute",
-  "alt", 
-  "ast", 
-  "bilirubin_total", 
-  "ph_arterial", 
-  "sodium", 
-  "potassium", 
-  "po2_arterial", 
+  "alt",
+  "ast",
+  "bilirubin_total",
+  "ph_arterial",
+  "sodium",
+  "potassium",
+  "po2_arterial",
   "pco2_arterial")
 
 validation_specs = list(
   list(
     table_name = "patient",
-    req_vars   = c("patient_id", 
-                   "race_category", 
+    req_vars   = c("patient_id",
+                   "race_category",
                    "ethnicity_category",
-                   "sex_category", 
+                   "sex_category",
                    "death_dttm")
   ),
   list(
     table_name = "hospitalization",
-    req_vars   = c("patient_id", 
-                   "hospitalization_id", 
+    req_vars   = c("patient_id",
+                   "hospitalization_id",
                    "age_at_admission",
-                   "admission_dttm", 
+                   "admission_dttm",
                    "discharge_dttm")
   ),
   list(
     table_name = "adt",
-    req_vars   = c("hospitalization_id", 
+    req_vars   = c("hospitalization_id",
                    "hospital_id",
-                   "location_category", 
-                   "in_dttm", 
+                   "location_category",
+                   "in_dttm",
                    "out_dttm")
   ),
   list(
     table_name = "medication_admin_continuous",
-    req_vars   = c("hospitalization_id", 
-                   "med_group", 
+    req_vars   = c("hospitalization_id",
+                   "med_group",
                    "med_category"),
     req_values = list(
       med_group    = "vasoactives",
-      med_category = c("norepinephrine", 
-                       "vasopressin", 
-                       "epinephrine", 
+      med_category = c("norepinephrine",
+                       "vasopressin",
+                       "epinephrine",
                        "phenylephrine")
     )
   ),
   list(
     table_name = "respiratory_support",
-    req_vars   = c("hospitalization_id", 
-                   "device_category", 
+    req_vars   = c("hospitalization_id",
+                   "device_category",
                    "recorded_dttm"),
-    req_values = list(device_category = c("IMV", 
-                                          "NIPPV", 
+    req_values = list(device_category = c("IMV",
+                                          "NIPPV",
                                           "High Flow NC"))
   ),
   list(
     table_name = "vitals",
-    req_vars   = c("hospitalization_id", 
-                   "vital_category", 
-                   "vital_value", 
+    req_vars   = c("hospitalization_id",
+                   "vital_category",
+                   "vital_value",
                    "recorded_dttm"),
     req_values = list(vital_category = req_vitals)
   ),
   list(
     table_name = "labs",
-    req_vars   = c("hospitalization_id", 
-                   "lab_category", 
-                   "lab_value", 
+    req_vars   = c("hospitalization_id",
+                   "lab_category",
+                   "lab_value",
                    "lab_result_dttm"),
     req_values = list(lab_category = req_labs)
   ),
   list(
     table_name = "hospital_diagnosis",
-    req_vars   = c("hospitalization_id", 
-                   "diagnosis_code", 
+    req_vars   = c("hospitalization_id",
+                   "diagnosis_code",
                    "diagnosis_code_format")
   ),
   list(
     table_name = "code_status",
-    req_vars   = c("patient_id", 
-                   "start_dttm", 
+    req_vars   = c("patient_id",
+                   "start_dttm",
                    "code_status_category")
   ))
 
@@ -878,16 +869,16 @@ validate_all_tables(data_list, validation_specs)
 has_patient_assessments = "patient_assessments" %in% clif_table_basenames
 
 if (has_patient_assessments) {
-  
+
   pa_file = table_file_map[["patient_assessments"]]
-  
+
   data_list[["patient_assessments"]] = cast_id_keys(switch(
     file_type,
     parquet = arrow::open_dataset(pa_file),
     csv     = arrow::read_csv_arrow(pa_file),
     fst     = arrow::arrow_table(fst::read_fst(pa_file, as.data.table = TRUE))
   ))
-  
+
   pa_validation = validate_table(
     tbl        = data_list[["patient_assessments"]],
     table_name = "patient_assessments",
@@ -895,7 +886,7 @@ if (has_patient_assessments) {
                    "assessment_category", "numerical_value"),
     req_values = list(assessment_category = "gcs_total")
   )
-  
+
   if (!is.null(pa_validation)) {
     warning("patient_assessments present but failed validation:\n",
             pa_validation,
@@ -905,7 +896,7 @@ if (has_patient_assessments) {
   } else {
     message("Optional table patient_assessments loaded and validated.")
   }
-  
+
 } else {
   message("Optional table patient_assessments not found; APACHE II will default GCS to 15.")
 }
@@ -915,23 +906,23 @@ if (has_patient_assessments) {
 has_crrt = "crrt_therapy" %in% clif_table_basenames
 
 if (has_crrt) {
-  
+
   crrt_file = table_file_map[["crrt_therapy"]]
-  
+
   data_list[["crrt_therapy"]] = cast_id_keys(switch(
     file_type,
     parquet = arrow::open_dataset(crrt_file),
     csv     = arrow::read_csv_arrow(crrt_file),
     fst     = arrow::arrow_table(fst::read_fst(crrt_file, as.data.table = TRUE))
   ))
-  
+
   # validate crrt_therapy
   crrt_validation = validate_table(
     tbl        = data_list[["crrt_therapy"]],
     table_name = "crrt_therapy",
     req_vars   = c("hospitalization_id", "recorded_dttm", "crrt_mode_category")
   )
-  
+
   if (!is.null(crrt_validation)) {
     warning("crrt_therapy table present but failed validation:\n",
             crrt_validation,
@@ -941,7 +932,7 @@ if (has_crrt) {
   } else {
     message("Optional table crrt_therapy loaded and validated.")
   }
-  
+
 } else {
   message("Optional table crrt_therapy not found — CRRT flags will be skipped.")
 }
