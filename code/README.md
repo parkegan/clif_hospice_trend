@@ -6,8 +6,6 @@ Detailed per-script documentation for the federated CLIF hospice-discharge pipel
 **Study period:** 2016-01-01 through 2024-06-30
 **Cohort:** Adult (≥18) inpatient admissions across CLIF consortium sites (~40 hospitals)
 
-Only de-identified, CCN-level aggregates leave a site. No patient-level data is transmitted.
-
 ---
 
 ## Pipeline overview
@@ -199,14 +197,3 @@ All shareable CSVs carry a `site` column for cross-site compilation. Watch the r
 
 Shared reference files must be identical across sites for cross-site estimates to be comparable; site-specific files are supplied locally (see `.gitignore`).
 
----
-
-## Remaining gaps
-
-| Item | Status |
-|---|---|
-| Federated estimand / pooling design | Designed (`federation_estimand_design.md`) and the site-side standardization is wired in; awaits the coordinating center finalizing the standard population |
-| Comfort/AND windowing | Under investigation — few AND orders land inside encounter windows; likely pre-admission standing orders |
-| ADT coverage gap (~30%) | Confirmed a genuine coverage issue, not a join bug; the by-year/by-type QI breakdown characterizes it per site |
-| `SYM016` acuity mapping | Flagged for review but absent from the reviewed sheet; provisionally `Other/residual` |
-| Early-window LST/organ-support for the clinical-course model | `icu_flag`/`lst_any_flag` are whole-stay; windowing to the early window is follow-up |
