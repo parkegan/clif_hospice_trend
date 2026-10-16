@@ -45,6 +45,13 @@
 # Random effects:
 #     - (1 | hospital_unit)
 #     - (1 | health_system)   only where a site spans 3 or more systems
+#
+# Fixed effects fallback (binary and multinomial; below the 3 hospital floor,
+# fewer than 2 hospitals with events, or on a random effects error): hospital
+# enters as a FIXED intercept, one dummy per hospital beyond the largest,
+# wherever the analytic sample has 2 or more hospitals, so the fallback ORs
+# stay within hospital. See add_hospital_fe in section 4. sigma^2, the MOR,
+# the shrunken profiles and the risk standardized composition are GLMM only.
 
 # Variation reporting: the protocol replaced the ICC with a profiling suite.
 # The headline quantities are sigma^2 with an interval, the median odds ratio,
@@ -85,7 +92,23 @@
 #     - clinical course outputs now carry course_window_hours + course_flag_provenance
 #     - coefficient CSVs carry control_sampled, control_fraction, n_reference_used
 
-# Last updated 26.10.16: glmer smoke test added at startup. The UMN 261015
+# Last updated 26.10.16 (second change set): hospital FIXED intercept in the
+# fixed effects fallbacks, binary and multinomial. Below the 3 hospital floor
+# (or on a random effects error) the fallbacks used to drop hospital from the
+# model entirely, so a two hospital site's ORs were population averaged
+# rather than within hospital and their SEs ignored the clustering, and they
+# were not comparable with the GLMM's conditional ORs pooled at the
+# coordinating center. Hospital now enters every fallback as a fixed
+# intercept wherever the analytic sample has 2 or more hospitals
+# (add_hospital_fe, section 4; the reference is the largest hospital in the
+# fit). The hospital contrasts are written as ordinary coefficient rows with
+# term prefix hospital_fe, and two new columns, hospital_fixed_intercept and
+# hospital_fe_reference, travel on every fallback coefficient row and on
+# aim2_multinomial_status. model_type labels are unchanged (fixed_only,
+# fixed_fallback, multinomial_fixed), so the compile census still works. No
+# change to any GLMM, to sigma^2, or to the profiles. Version 04_v261016b.
+#
+# Earlier on 26.10.16: glmer smoke test added at startup. The UMN 261015
 # run showed every glmer() call erroring instantly (environment level; most
 # often a Matrix / lme4 binary mismatch after a package update), so all 13
 # binary models silently degraded to fixed effects glm and the bundle shipped
@@ -401,7 +424,7 @@ run_config = rbind(run_config, data.table(
                        error = function(e) "absent"),
               as.character(utils::packageVersion("data.table")))))
 
-run_config[, `:=`(site = site_lowercase, script_version = "04_v261016")]
+run_config[, `:=`(site = site_lowercase, script_version = "04_v261016b")]
 fwrite(run_config, shareable_path(
   paste0("aim2a3_run_config_", site_lowercase, "_", today, ".csv")))
 message(sprintf("Run configuration saved (subsampling %s | clinical course %s | era %s | multinomial %s).",
@@ -1914,6 +1937,39 @@ hospital_variation_profile = function(fit, model_dt, outcome_label, subgroup_lab
 }
 
 
+# ---- Hospital fixed intercept for the fixed effects fallbacks ----------------
+# ADDED 2026.10.16. Below the 3 hospital floor the hospital random intercept
+# is not estimable: two hospitals give one contrast, not a variance, and the
+# mblogit inner solve is singular. The fallbacks used to drop hospital from
+# the model entirely, which made the fallback ORs population averaged rather
+# than within hospital (not comparable with the GLMM's conditional ORs at
+# larger sites) and left their SEs blind to the clustering. Hospital now
+# enters each fallback as a FIXED intercept: one dummy per hospital beyond
+# the reference, which is the hospital with the most encounters in the
+# analytic sample. That restores the within hospital interpretation and
+# absorbs the intercept level clustering, so no separate SE correction is
+# needed.
+#
+# The hospital contrasts travel as ordinary coefficient rows (term =
+# hospital_fe<unit>, log odds vs the reference hospital) with
+# hospital_fe_reference naming the reference unit, so the coordinating
+# center can report them as site level hospital contrasts and keep them out
+# of the covariate pooling by the hospital_fe prefix. A hospital with no
+# events in a fit separates on its dummy (OR near 0, very large SE), exactly
+# as a rare covariate level does; the covariate ORs are unaffected and the
+# compile step drops the separated row as it already does for those levels.
+# An analytic sample with a single hospital gets no dummy (it would alias
+# the intercept). sigma^2, the MOR, the shrunken hospital profiles and the
+# risk standardized composition remain GLMM only.
+add_hospital_fe = function(dt) {
+  counts = if ("row_weight" %in% names(dt)) dt[, .(N = sum(row_weight)), by = hospital_unit]
+           else dt[, .N, by = hospital_unit]
+  ref_h = counts[order(-N, hospital_unit)][1L, hospital_unit]
+  dt[, hospital_fe := relevel(factor(hospital_unit), ref = ref_h)]
+  ref_h
+}
+
+
 # function to fit one binary GLMM
 # CHANGED 2026.10.14: ref_label names the reference category the globals
 # ref_group / n_ref currently hold (set per family by fit_family()); it is
@@ -2003,14 +2059,21 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "eol",
   }
 
   if (n_hospitals_eff < 3 || hosp_with_events < 2) {
-    message(sprintf("    %s: insufficient hospital units (%d total, %d with events) — fitting fixed effects only.",
-                    outcome_label, n_hospitals_eff, hosp_with_events))
+    # ADDED 2026.10.16: hospital enters as a FIXED intercept wherever the
+    # analytic sample has 2 or more hospitals (add_hospital_fe above)
+    hosp_fixed = n_hospitals_eff >= 2L
+    hosp_ref   = if (hosp_fixed) add_hospital_fe(model_dt) else NA_character_
+    f_fit      = if (hosp_fixed) update(f_fixed, . ~ . + hospital_fe) else f_fixed
+    message(sprintf("    %s: insufficient hospital units for a random intercept (%d total, %d with events) -> fixed effects fit%s.",
+                    outcome_label, n_hospitals_eff, hosp_with_events,
+                    if (hosp_fixed) sprintf(" with hospital fixed intercept (reference %s)", hosp_ref)
+                    else " (single hospital, no hospital term)"))
 
     # fixed-effects logistic regression (no random intercepts)
     tryCatch({
       t_fit = Sys.time()
       fit_fixed = glm(
-        f_fixed,
+        f_fit,
         data = model_dt, family = binomial(link = "logit"),
         weights = row_weight            # change 4: all 1s unless compressed
       )
@@ -2036,7 +2099,9 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "eol",
         control_fraction = round(ss$fraction, 6),
         n_reference_used = ss$n_used,
         row_compressed   = isTRUE(row_compress_enabled),
-        compression_ratio = compression_ratio
+        compression_ratio = compression_ratio,
+        hospital_fixed_intercept = hosp_fixed,
+        hospital_fe_reference    = hosp_ref
       )]
 
       # no ICC for fixed-effects model
@@ -2175,11 +2240,18 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "eol",
       message(sprintf("    %s: GLMM failed: %s", outcome_label, e$message))
 
       # fallback to fixed effects
-      message(sprintf("    %s: falling back to fixed-effects model.", outcome_label))
+      # ADDED 2026.10.16: hospital enters as a FIXED intercept (add_hospital_fe
+      # above); n_hospitals_eff is 3 or more on this branch, so always on
+      hosp_fixed = n_hospitals_eff >= 2L
+      hosp_ref   = if (hosp_fixed) add_hospital_fe(model_dt) else NA_character_
+      f_fit      = if (hosp_fixed) update(f_fixed, . ~ . + hospital_fe) else f_fixed
+      message(sprintf("    %s: falling back to fixed-effects model%s.", outcome_label,
+                      if (hosp_fixed) sprintf(" with hospital fixed intercept (reference %s)", hosp_ref)
+                      else ""))
       tryCatch({
         t_fit = Sys.time()
         fit_fixed = glm(
-          f_fixed,
+          f_fit,
           data = model_dt, family = binomial(link = "logit"),
           weights = row_weight          # change 4: all 1s unless compressed
         )
@@ -2205,7 +2277,9 @@ fit_binary_glmm = function(outcome_label, subgroup_label = "eol",
           control_fraction = round(ss$fraction, 6),
           n_reference_used = ss$n_used,
           row_compressed   = isTRUE(row_compress_enabled),
-          compression_ratio = compression_ratio
+          compression_ratio = compression_ratio,
+          hospital_fixed_intercept = hosp_fixed,
+          hospital_fe_reference    = hosp_ref
         )]
 
         icc_row = data.table(
@@ -2442,6 +2516,8 @@ mn_fitted          = FALSE
 mn_error           = NA_character_
 mn_model_type      = "none"
 mn_fallback_reason = NA_character_
+mn_hosp_fixed      = FALSE            # ADDED 2026.10.16: fallback hospital fixed intercept
+mn_hosp_ref        = NA_character_
 mn_ok = requireNamespace("mclogit", quietly = TRUE)
 
 # CHANGED 2026.10.14: the multinomial is fit on the END OF LIFE cohort at
@@ -2542,8 +2618,11 @@ if (!isTRUE(run_multinomial)) {
   # falls back the same way. The fallback still delivers the protocol 3.6.2
   # coefficients (model_type = multinomial_fixed); the risk standardized
   # composition and the consistency checks are skipped because both need
-  # hospital random effects. As with the binary fixed_only fits, fallback SEs
-  # do not account for within hospital correlation.
+  # hospital random effects. CHANGED 2026.10.16: as in the binary fallbacks,
+  # hospital now enters the fallback as a FIXED intercept wherever the
+  # multinomial sample has 2 or more hospitals (add_hospital_fe, section 4),
+  # so the fallback ORs are within hospital and the intercept level
+  # clustering is absorbed by the hospital dummies.
   mn_hosp_n      = mn_dt[, uniqueN(hospital_unit)]
   mn_hosp_events = mn_dt[outcome_category != eol_ref, uniqueN(hospital_unit)]
   mn_use_re      = mn_hosp_n >= 3 && mn_hosp_events >= 2
@@ -2756,10 +2835,19 @@ if (!isTRUE(run_multinomial)) {
 
   # fixed effects multinomial fallback (see the fallback design note above)
   if (mn_model_type == "none") {
-    message("  Fitting fixed effects multinomial fallback (no hospital random effect)...")
+    # ADDED 2026.10.16: hospital enters the fallback as a FIXED intercept
+    # (add_hospital_fe, section 4), mirroring the binary fallbacks. The
+    # random effects fit above used mn_formula unchanged.
+    mn_hosp_fixed    = mn_hosp_n >= 2L
+    mn_hosp_ref      = if (mn_hosp_fixed) add_hospital_fe(mn_dt) else NA_character_
+    mn_formula_fixed = if (mn_hosp_fixed) update(mn_formula, . ~ . + hospital_fe) else mn_formula
+    message(sprintf("  Fitting fixed effects multinomial fallback (%s)...",
+                    if (mn_hosp_fixed) sprintf("hospital fixed intercept, %d units, reference %s",
+                                               mn_hosp_n, mn_hosp_ref)
+                    else "single hospital, no hospital term"))
     t_fit_mnf = Sys.time()
     mn_fit_fixed = tryCatch(
-      mblogit(mn_formula, data = mn_dt, control = mclogit.control(maxit = 100)),
+      mblogit(mn_formula_fixed, data = mn_dt, control = mclogit.control(maxit = 100)),
       error = function(e) {
         mn_error <<- conditionMessage(e)
         message("  Fixed effects multinomial also failed: ", e$message)
@@ -2783,7 +2871,9 @@ if (!isTRUE(run_multinomial)) {
         subgroup = "eol", reference_category = eol_ref,
         control_sampled  = ss_mn$sampled,
         control_fraction = round(ss_mn$fraction, 6),
-        n_reference_used = ss_mn$n_used
+        n_reference_used = ss_mn$n_used,
+        hospital_fixed_intercept = mn_hosp_fixed,
+        hospital_fe_reference    = mn_hosp_ref
       )]
       fwrite(mn_coefs, shareable_path(
         paste0("aim2_multinomial_coefficients_", site_lowercase, "_", today, ".csv")))
@@ -2791,7 +2881,7 @@ if (!isTRUE(run_multinomial)) {
       message("  RS composition and consistency checks skipped: both need hospital random effects.")
       rm(mn_coefs, mn_fit_fixed)
     }
-    suppressWarnings(rm(mn_dt))
+    suppressWarnings(rm(mn_dt, mn_formula_fixed))
   }
 } else {
   message("  mclogit not available — multinomial model skipped.")
@@ -2805,7 +2895,10 @@ fwrite(data.table(site               = site_lowercase,
                   multinomial_fitted = isTRUE(mn_fitted),
                   model_type         = mn_model_type,
                   fallback_reason    = fifelse(is.na(mn_fallback_reason), "", mn_fallback_reason),
-                  error              = fifelse(is.na(mn_error), "", mn_error)),
+                  error              = fifelse(is.na(mn_error), "", mn_error),
+                  # ADDED 2026.10.16: whether the fallback carried hospital dummies
+                  hospital_fixed_intercept = isTRUE(mn_hosp_fixed),
+                  hospital_fe_reference    = fifelse(is.na(mn_hosp_ref), "", mn_hosp_ref)),
        shareable_path(paste0("aim2_multinomial_status_", site_lowercase, "_", today, ".csv")))
 message(sprintf("  Saved aim2_multinomial_status (fitted = %s, model_type = %s).",
                 isTRUE(mn_fitted), mn_model_type))
@@ -3206,7 +3299,7 @@ suppressWarnings(rm(all_var_summary, all_hosp_profile, model_term, mn_dt,
 suppressWarnings(rm(era_summary_list, era_ranef_list, era_levels, era_outcomes,
                     hosp_rates, var_stats, n_hospice_unit_hosp,
                     mn_ok, mn_fitted, mn_error, mn_model_type, mn_fallback_reason,
-                    mn_use_re, mn_hosp_n, mn_hosp_events,
+                    mn_use_re, mn_hosp_n, mn_hosp_events, mn_hosp_fixed, mn_hosp_ref,
                     all_var_summary, all_hosp_profile))
 
 gc()
