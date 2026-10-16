@@ -1,5 +1,9 @@
 
 # 01_cohort.R
+# Updated 26.10.16: small-cell suppression with complementary (subtraction
+# proof) masking applied to the shareable hospital summaries in section 8b.
+# The first populated UMN summary (261015) carried raw counts of 1 to 4 and
+# their exact values were recoverable by subtraction from published totals.
 
 # Primary analysis cohort for hospice discharge study
 
@@ -1102,6 +1106,103 @@ save_output(local_summary, "hospital_summary_by_hospital_id", shareable = FALSE)
 # hospital_unit_type recording which key each row carries. This mirrors 04's
 # hospital_unit fallback, so the 01 summaries and the 04 model outputs stay
 # on the same hospital keys at a site whose map is broken or missing.
+
+# SMALL-CELL SUPPRESSION (2026.10.16): these summaries are SHAREABLE count
+# tables, so they must pass disclosure control before leaving the site (the
+# first populated UMN summary carried raw counts of 1 to 4). The shared
+# suppress_small_cells() masks cells independently, but the outcome counts
+# here satisfy exact identities (the categories partition n_admissions, and
+# n_hospice_all / n_sf_hospice are sums of published components), so a single
+# masked cell is recoverable by subtraction. This wrapper therefore applies
+# COMPLEMENTARY suppression: after the primary mask (0 < n < threshold), any
+# identity with exactly one masked member gets its smallest other component
+# masked too, iterated to closure. n_admissions is never masked (it is the
+# denominator the coordinating center needs). Rates and ratios whose
+# numerator is masked are blanked (they invert to the count exactly).
+suppress_hospital_summary = function(dt) {
+  out = copy(dt)
+  thr = small_cell_threshold
+  cnt_cols = intersect(c(
+    "n_routine_discharge", "n_in_hospital_death_acute",
+    "n_sf_hospice_death", "n_sf_hospice_alive", "n_external_hospice",
+    "n_transfer_acute", "n_other_ama", "n_hospice_all", "n_sf_hospice",
+    "n_sf_stitched", "n_short_survival"), names(out))
+  identities = list(
+    c("n_admissions", "n_routine_discharge", "n_in_hospital_death_acute",
+      "n_sf_hospice_death", "n_sf_hospice_alive", "n_external_hospice",
+      "n_transfer_acute", "n_other_ama"),
+    c("n_hospice_all", "n_sf_hospice_death", "n_sf_hospice_alive",
+      "n_external_hospice"),
+    c("n_sf_hospice", "n_sf_hospice_death", "n_sf_hospice_alive"))
+  rate_map = list(
+    rate_hospice_all        = "n_hospice_all",
+    rate_death_acute        = "n_in_hospital_death_acute",
+    rate_transfer           = "n_transfer_acute",
+    rate_sf_hospice         = "n_sf_hospice",
+    rate_ext_hospice        = "n_external_hospice",
+    rate_short_surv         = "n_short_survival",
+    hospice_mortality_ratio = c("n_hospice_all", "n_in_hospital_death_acute"))
+
+  all_cols = union(cnt_cols, intersect("n_admissions", names(out)))
+  M    = as.matrix(out[, ..all_cols])
+  # primary mask: any count in 1..(thr-1), n_admissions included (a hospital
+  # or hospital-quarter with fewer than thr admissions is itself a small cell)
+  mask = !is.na(M) & M > 0 & M < thr
+
+  # Complementary closure. Within one identity (total = components), the sum
+  # of the masked components is ALWAYS recoverable as total minus the unmasked
+  # components, so masking cells in pairs is not enough: the recoverable sum S
+  # must itself clear the threshold. For each identity with an unmasked total,
+  # masking continues while a single component is masked or S < threshold,
+  # preferring the smallest additional component that lifts S past the
+  # threshold (least information lost). An identity whose total is itself
+  # masked only ties masked cells to each other within the "<thr" range and
+  # discloses no exact value, so it needs no further action.
+  repeat {
+    changed = FALSE
+    for (idn in identities) {
+      tot   = idn[1]
+      comps = intersect(idn[-1], cnt_cols)
+      if (!tot %in% colnames(M) || length(comps) < 2L) next
+      for (r in seq_len(nrow(M))) {
+        if (mask[r, tot]) next
+        mC = comps[mask[r, comps]]
+        if (!length(mC)) next
+        uC = setdiff(comps, mC)
+        S  = M[r, tot] - sum(M[r, uC])
+        if (S == 0) next   # masked cells are all zero; zeros are not disclosive
+        if (length(mC) >= 2L && S >= thr) next
+        if (!length(uC)) next   # S equals the published total (>= thr)
+        lift = uC[S + M[r, uC] >= thr]
+        pick = if (length(lift)) lift[which.min(M[r, lift])] else uC[which.max(M[r, uC])]
+        mask[r, pick] = TRUE
+        changed = TRUE
+      }
+    }
+    if (!changed) break
+  }
+  out[, suppressed := as.integer(rowSums(mask) > 0L)]
+  lab = paste0("<", thr)
+  for (cc in all_cols) {
+    val  = M[, cc]
+    chr  = rep(NA_character_, length(val))
+    keep = !is.na(val)
+    chr[keep] = format(val[keep], scientific = FALSE, trim = TRUE)
+    chr[mask[, cc]] = lab
+    data.table::set(out, j = cc, value = chr)
+  }
+  denom_masked = if ("n_admissions" %in% colnames(mask)) {
+    mask[, "n_admissions"]
+  } else rep(FALSE, nrow(mask))
+  for (rc in intersect(names(rate_map), names(out))) {
+    nums = intersect(rate_map[[rc]], cnt_cols)
+    if (!length(nums)) next
+    hit = rowSums(mask[, nums, drop = FALSE]) > 0L | denom_masked
+    if (any(hit)) data.table::set(out, i = which(hit), j = rc, value = NA_real_)
+  }
+  out
+}
+
 if (is.null(hospital_medicare_map)) {
   message("  No usable CCN map — hospital summaries will be keyed by raw ADT hospital_id.")
   cohort_ccn = copy(cohort)
@@ -1208,7 +1309,10 @@ if (is.null(hospital_medicare_map)) {
                     format(h$n_transfer_acute, big.mark = ",")))
   }
 
-  save_output(ccn_summary, "hospital_summary",
+  ccn_summary_out = if (isTRUE(suppress_small_cells_enabled)) {
+    suppress_hospital_summary(ccn_summary)
+  } else ccn_summary
+  save_output(ccn_summary_out, "hospital_summary",
               shareable = TRUE, subfolder = "aim2")
 
   message("  Shareable CCN-level summary saved to shareable output.aim2/")
@@ -1295,7 +1399,10 @@ if (is.null(hospital_medicare_map)) {
                   year(max(ccn_quarterly$discharge_quarter)),
                   quarter(max(ccn_quarterly$discharge_quarter))))
 
-  save_output(ccn_quarterly, "hospital_summary_quarterly",
+  ccn_quarterly_out = if (isTRUE(suppress_small_cells_enabled)) {
+    suppress_hospital_summary(ccn_quarterly)
+  } else ccn_quarterly
+  save_output(ccn_quarterly_out, "hospital_summary_quarterly",
               shareable = TRUE, subfolder = "aim2")
 
   message("  Shareable quarterly CCN summary saved to shareable output.aim2/")

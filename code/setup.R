@@ -14,6 +14,19 @@
 # After this finishes, run the pipeline with:
 #     Rscript code/run_pipeline.R
 #
+# Updated 2026.10.16 (UMN 261015 postmortem):
+#   * Added a mixed model FIT test at the end. The loadability check below
+#     (requireNamespace) proves a namespace LOADS, not that it works: an lme4
+#     binary paired with a Matrix it was not compiled against loads cleanly
+#     and then errors on every glmer() call ("function 'cholmod_factor_ldetA'
+#     not provided by package 'Matrix'" or similar). That is exactly the
+#     failure mode a fresh renv library can produce on Linux when BINARY
+#     packages are restored at locked versions (prebuilt binaries only exist
+#     for current versions, so a restored older Matrix can meet an lme4 built
+#     against a newer one), and it silently degrades every mixed model in 04
+#     to fixed effects. The test below fits a toy GLMM and prints the repair
+#     (reinstall Matrix and lme4 from SOURCE together, restart, snapshot).
+#
 # Updated 2026.10.09 (buddy site feedback, restricted install environments):
 #   * The package list is now READ FROM code/_dependencies.R at run time and
 #     unioned with the fallback list below, so the two manifests can never
@@ -101,4 +114,33 @@ if (length(missing)) {
 } else {
   message("\nAll ", length(pkgs), " packages available.")
 }
+
+# --- mixed model FIT test (2026.10.16; see header note) -----------------------
+# Loadable is not workable: fit one toy GLMM so an lme4/Matrix binary mismatch
+# is caught HERE, during setup, instead of silently degrading every mixed model
+# in 04 to fixed effects during a multi hour site run.
+glmm_ok <- tryCatch({
+  set.seed(1)
+  toy <- data.frame(y = rbinom(400L, 1L, 0.3),
+                    g = rep(sprintf("h%02d", 1:8), each = 50L),
+                    x = rnorm(400L))
+  invisible(suppressWarnings(
+    lme4::glmer(y ~ x + (1 | g), data = toy,
+                family = binomial(link = "logit"), nAGQ = 1)))
+  TRUE
+}, error = function(e) conditionMessage(e))
+
+if (isTRUE(glmm_ok)) {
+  message("Mixed model fit test passed (lme4::glmer works in this library).")
+} else {
+  message("\nWARNING: lme4 loads but CANNOT FIT a mixed model in this library:\n    ",
+          glmm_ok,
+          "\n  This is usually a Matrix / lme4 binary mismatch (common after a ",
+          "renv restore\n  with prebuilt Linux binaries, or after any update of ",
+          "Matrix alone). Repair it\n  BEFORE running the pipeline — 04 will ",
+          "refuse to run until this passes:\n",
+          "    install.packages(c(\"Matrix\", \"lme4\"), type = \"source\")\n",
+          "  then RESTART R, re-run this setup, and renv::snapshot() the fix.")
+}
+
 message("\nSetup complete. Run the pipeline with:  Rscript code/run_pipeline.R")

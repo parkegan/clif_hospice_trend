@@ -85,7 +85,16 @@
 #     - clinical course outputs now carry course_window_hours + course_flag_provenance
 #     - coefficient CSVs carry control_sampled, control_fraction, n_reference_used
 
-# Last updated bpe 26.10.14 (third change set): Elixhauser from PRESENT ON
+# Last updated 26.10.16: glmer smoke test added at startup. The UMN 261015
+# run showed every glmer() call erroring instantly (environment level; most
+# often a Matrix / lme4 binary mismatch after a package update), so all 13
+# binary models silently degraded to fixed effects glm and the bundle shipped
+# without sigma^2, MOR, or any hospital profile. An environment that cannot
+# fit a toy mixed model now STOPS the run with reinstall instructions instead
+# of quietly writing a bundle without the variation outputs. Version bumped
+# to 04_v261016 (no statistical changes from v261014c).
+#
+# Previous update bpe 26.10.14 (third change set): Elixhauser from PRESENT ON
 # ADMISSION diagnoses only (section 2a). The POA column is detected by name
 # (poa_present in CLIF 2.1); Y / W / 1 count as present, N / U / 0 as not
 # present and are dropped, exempt or blank values are kept as not stated. The
@@ -205,6 +214,33 @@ for (p in pkg_needed) {
 }
 
 library(lme4)
+
+# GLMER SMOKE TEST (2026.10.16, see header). If the environment cannot fit a
+# trivial mixed model, every real fit below would silently take the fixed
+# effects fallback and the site would distribute a bundle with no variation
+# outputs -- which is exactly what happened at UMN on 261015. Fail loudly
+# here instead, before any data are touched.
+glmer_smoke = tryCatch({
+  set.seed(1)
+  toy = data.frame(y = rbinom(400L, 1L, 0.3),
+                   g = rep(sprintf("h%02d", 1:8), each = 50L),
+                   x = rnorm(400L))
+  invisible(suppressWarnings(
+    glmer(y ~ x + (1 | g), data = toy, family = binomial(link = "logit"),
+          nAGQ = 1)))
+  TRUE
+}, error = function(e) conditionMessage(e))
+if (!isTRUE(glmer_smoke)) {
+  stop("lme4::glmer cannot fit a toy mixed model in this R session:\n    ",
+       glmer_smoke,
+       "\n  Every model in this script would silently fall back to fixed ",
+       "effects.\n  This is usually a Matrix / lme4 binary mismatch after a ",
+       "package update.\n  Reinstall BOTH from source in one session:\n",
+       "    install.packages(c('Matrix', 'lme4'), type = 'source')\n",
+       "  then RESTART R and re-run the pipeline.", call. = FALSE)
+}
+message("  glmer smoke test passed (mixed models estimable in this session).")
+suppressWarnings(rm(glmer_smoke, toy))
 library(ggplot2)
 library(patchwork)
 
@@ -350,7 +386,22 @@ run_config = data.table(
                         apache2_impute_val),
                    function(x) format(x, scientific = FALSE), character(1))
 )
-run_config[, `:=`(site = site_lowercase, script_version = "04_v261014c")]
+# ENVIRONMENT MANIFEST (2026.10.16): the UMN 261015 failure (every glmer
+# erroring, all models silently fixed effects) could not be diagnosed from the
+# bundle because nothing recorded which package stack produced it. Record the
+# versions that matter for the mixed models so the coordinating center can see
+# an environment change between runs without asking the site for its console.
+run_config = rbind(run_config, data.table(
+  setting = c("r_version", "lme4_version", "matrix_version",
+              "mclogit_version", "data_table_version"),
+  value   = c(as.character(getRversion()),
+              as.character(utils::packageVersion("lme4")),
+              as.character(utils::packageVersion("Matrix")),
+              tryCatch(as.character(utils::packageVersion("mclogit")),
+                       error = function(e) "absent"),
+              as.character(utils::packageVersion("data.table")))))
+
+run_config[, `:=`(site = site_lowercase, script_version = "04_v261016")]
 fwrite(run_config, shareable_path(
   paste0("aim2a3_run_config_", site_lowercase, "_", today, ".csv")))
 message(sprintf("Run configuration saved (subsampling %s | clinical course %s | era %s | multinomial %s).",
