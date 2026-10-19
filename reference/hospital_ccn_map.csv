@@ -19,8 +19,8 @@ NU,NU - Huntley,Northwestern Medicine Huntley Hospital,140116,nu_hh
 NU,NU - McHenry,Northwestern Medicine McHenry Hospital,140116,nu_mh
 NU,NU - Palos,Northwestern Medicine Palos Hospital,140062,nu_ph
 NU,NU - Vally West,Northwestern Medicine Valley West Hospitala,141340,nu_vwh
-OHSU,OHSU - OHSU,Oregon Health & Science University Hospital (Ohsu Hospital And Clinics),380009,ohsu_main
-OHSU,OHSU - HMC,Hillsboro Medical Center,380021,ohsu_hmc
+OHSU,OHSU - OHSU,Oregon Health & Science University Hospital (Ohsu Hospital And Clinics),380009,ohsu
+OHSU,OHSU - HMC,Hillsboro Medical Center,380021,ohsu
 Penn,UPHS (Penn) - HUP,Hospital of the University of Pennsylvania,390111,penn_hup
 Penn,UPHS (Penn) - PAH,Pennsylvania Hospital,390226,penn_pah
 Penn,UPHS (Penn ) - PPMC,Penn Presbyterian Medical Center,390223,penn_ppmc
