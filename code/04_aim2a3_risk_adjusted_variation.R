@@ -92,7 +92,16 @@
 #     - clinical course outputs now carry course_window_hours + course_flag_provenance
 #     - coefficient CSVs carry control_sampled, control_fraction, n_reference_used
 
-# Last updated 26.10.16 (second change set): hospital FIXED intercept in the
+# Last updated 26.10.19: single hospital sites no longer crash stage 04.
+# UChicago (one hospital_id) hit a stop in 2A.1: compute_var_stats returned
+# NULL below 2 hospitals, the variation table came back with zero columns,
+# and the summary print errored. It now returns a typed empty table, so a
+# one hospital site writes header only variation stats and continues through
+# the fixed effects fits; its hospital variation enters through the pooled
+# coordinating center model. Builds on v261016b (hospital fixed intercept in
+# the fallbacks, below); version bumped to 04_v261019.
+#
+# Previous update 26.10.16 (second change set): hospital FIXED intercept in the
 # fixed effects fallbacks, binary and multinomial. Below the 3 hospital floor
 # (or on a random effects error) the fallbacks used to drop hospital from the
 # model entirely, so a two hospital site's ORs were population averaged
@@ -424,7 +433,7 @@ run_config = rbind(run_config, data.table(
                        error = function(e) "absent"),
               as.character(utils::packageVersion("data.table")))))
 
-run_config[, `:=`(site = site_lowercase, script_version = "04_v261016b")]
+run_config[, `:=`(site = site_lowercase, script_version = "04_v261019")]
 fwrite(run_config, shareable_path(
   paste0("aim2a3_run_config_", site_lowercase, "_", today, ".csv")))
 message(sprintf("Run configuration saved (subsampling %s | clinical course %s | era %s | multinomial %s).",
@@ -1223,8 +1232,22 @@ message(sprintf("  Hospitals with inpatient hospice unit: %d of %d",
 # variation statistics — two versions per §2.1:
 #   (a) all hospitals (includes structural zeros at sites without hospice unit)
 #   (b) restricted to hospitals with an inpatient hospice unit
+# FIXED 2026.10.19 (UChicago, first single hospital site): this used to
+# return NULL below 2 hospitals. At a site with ONE hospital_id both calls
+# returned NULL, rbindlist() produced a zero column table, and the summary
+# print four lines down crashed the whole stage on `version` (resolving to
+# base R's version object). Return a TYPED empty table instead: the print
+# loop runs zero times, fwrite writes a header only CSV the compile layer
+# can read, and between hospital variation at a one hospital site correctly
+# comes from the pooled coordinating center model, not from this file.
 compute_var_stats = function(dt, version_label) {
-  if (nrow(dt) < 2) return(NULL)
+  if (nrow(dt) < 2) {
+    message(sprintf("  %s: %d hospital unit(s) — between hospital variation not defined; header only output.",
+                    version_label, nrow(dt)))
+    return(data.table(site = character(), version = character(),
+                      n_hospitals = integer(), measure = character(),
+                      iqr = numeric(), cv = numeric()))
+  }
   data.table(
     site = site_lowercase, version = version_label, n_hospitals = nrow(dt),
     measure = c("mortality_rate", "hospice_sf_rate", "hospice_all_rate", "transfer_rate"),
