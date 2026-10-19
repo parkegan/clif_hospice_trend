@@ -33,7 +33,7 @@
 #   aim3_lst_vs_nonlst_km_{site}.pdf
 
 
-# Last updated bpe 22.07.2026
+# Last updated bpe 27.05.2026
 
 
 # 0. setup ---------------------------------------------------------------------
