@@ -6,9 +6,9 @@ A federated electronic-health-record analysis of hospice discharge patterns amon
 
 ## Code Pipeline:
 
-- **Aim 1 — discharge patterns and timing.** Where and when hospitalized adults are discharged to hospice, and, for same-facility hospice transitions, competing-risks cumulative incidence of death in hospice versus live discharge (Aalen–Johansen, with Gray's test).
+- **Aim 1 — discharge patterns and timing.** Where and when hospitalized adults are discharged to hospice, length of time between hospice discharge and death.
 - **Aim 2A — risk-standardized disposition composition.** How hospitals vary in end-of-life discharge disposition after case-mix adjustment, reported as risk-standardized probabilities, between-hospital variance, the median odds ratio, reliability, and rank uncertainty.
-- **Aim 3 — documented care-transition trajectories (exploratory).** The documented signals around a hospice transition (code-status change, opioid initiation, lab cessation, life-sustaining-therapy withdrawal).
+- **Aim 3 — documented care-transition trajectories (exploratory).** Documented signals prior to hospice transition (code-status change, opioid initiation, lab cessation, life-sustaining-therapy withdrawal).
 
 | Stage | Script | Produces |
 |---|---|---|
