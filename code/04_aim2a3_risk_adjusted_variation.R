@@ -92,7 +92,28 @@
 #     - clinical course outputs now carry course_window_hours + course_flag_provenance
 #     - coefficient CSVs carry control_sampled, control_fraction, n_reference_used
 
-# Last updated 26.10.19: single hospital sites no longer crash stage 04.
+# Last updated 26.10.20 (Emory, first site with ONE pandemic era; data begin
+# October 2022, so every admission is Post-pandemic): the era factor was
+# hard releveled to "Pre-pandemic", which stopped the stage with "'ref' must
+# be an existing level". Three changes, version 04_v261020:
+#   (a) pandemic_period is built from the eras OBSERVED in the analytic
+#       sample, in calendar order, with the earliest observed era as the
+#       reference (Pre-pandemic at full window sites, so their output is
+#       unchanged).
+#   (b) with only one observed era the term is constant, so it is left out
+#       of base_rhs (and therefore of every primary, clinical course,
+#       multinomial and fallback model), exactly as the other baseline
+#       adjusters are when they do not vary. The era refits and the cross
+#       era Spearman are skipped with a message (they need 2 or more eras).
+#   (c) the standard population used for risk standardization is no longer
+#       filtered down to the site's single era when the term is not in the
+#       model (it was coerced to the site's era levels, which would have
+#       silently dropped every Pre and Acute pandemic standard row).
+#   run_config records era_levels_observed, era_reference and
+#   era_term_in_model so the coordinating center knows which sites carry no
+#   era coefficients. No change at sites with two or more eras beyond (a).
+#
+# Previous update 26.10.19: single hospital sites no longer crash stage 04.
 # UChicago (one hospital_id) hit a stop in 2A.1: compute_var_stats returned
 # NULL below 2 hospitals, the variation table came back with zero columns,
 # and the summary print errored. It now returns a typed empty table, so a
@@ -433,7 +454,7 @@ run_config = rbind(run_config, data.table(
                        error = function(e) "absent"),
               as.character(utils::packageVersion("data.table")))))
 
-run_config[, `:=`(site = site_lowercase, script_version = "04_v261019")]
+run_config[, `:=`(site = site_lowercase, script_version = "04_v261020")]
 fwrite(run_config, shareable_path(
   paste0("aim2a3_run_config_", site_lowercase, "_", today, ".csv")))
 message(sprintf("Run configuration saved (subsampling %s | clinical course %s | era %s | multinomial %s).",
@@ -1059,6 +1080,10 @@ apply_std_transform = function(raw) {
   if (!"sex_female" %in% names(d) && "sex_category" %in% names(d))
     d[, sex_female := fifelse(tolower(trimws(sex_category)) == "female", "Female", "Not female")]
   d[, sex_female      := factor(as.character(sex_female),      levels = std_transform$sex_levels)]
+  # 2026.10.20: at a single era site the era term is not in the model, so the
+  # standard population must not be filtered to that era; give every standard
+  # row the site's one level (it does not enter any prediction)
+  if (length(std_transform$era_levels) == 1L) d[, pandemic_period := std_transform$era_levels]
   d[, pandemic_period := factor(as.character(pandemic_period), levels = std_transform$era_levels)]
   if (!is.null(std_transform$pcs_levels) && "preexisting_code_status" %in% names(d))
     d[, preexisting_code_status := factor(as.character(preexisting_code_status), levels = std_transform$pcs_levels)]
@@ -1512,7 +1537,26 @@ if (!"pandemic_period" %in% names(model_base)) {
     model_base[, pandemic_period := "Pre-pandemic"]
   }
 }
-model_base[, pandemic_period := relevel(factor(pandemic_period), ref = "Pre-pandemic")]
+# FIXED 2026.10.20 (Emory): levels come from the eras OBSERVED here, in
+# calendar order, and the reference is the earliest observed era. The old
+# relevel(ref = "Pre-pandemic") stopped the stage at any site whose data
+# begin after 2019. Unrecognized labels (none expected) sort after the three
+# protocol eras.
+era_order    = c("Pre-pandemic", "Acute pandemic", "Post-pandemic")
+era_seen     = unique(as.character(model_base$pandemic_period))
+era_seen     = era_seen[!is.na(era_seen)]
+era_observed = c(intersect(era_order, era_seen), sort(setdiff(era_seen, era_order)))
+model_base[, pandemic_period := factor(as.character(pandemic_period), levels = era_observed)]
+era_reference = era_observed[1]
+era_in_model  = length(era_observed) >= 2L
+message(sprintf("  Pandemic eras observed: %s | reference: %s%s",
+                paste(era_observed, collapse = ", "), era_reference,
+                if (era_in_model) "" else " -> single era site: era term NOT in the model; era refits skipped"))
+run_config = rbind(run_config, data.table(
+  setting = c("era_levels_observed", "era_reference", "era_term_in_model"),
+  value   = c(paste(era_observed, collapse = "; "), era_reference, toupper(format(era_in_model))),
+  site           = site_lowercase,
+  script_version = run_config$script_version[1]), use.names = TRUE, fill = TRUE)
 
 n_model = nrow(model_base)
 message(sprintf("  Analytic sample: %s encounters (%s excluded for missing covariates).",
@@ -1662,7 +1706,7 @@ base_rhs = paste(
     "elix_centered",
     if (apache2_available) c("apache2_centered", "apache2_missing"),
     extra_base,
-    "pandemic_period"),
+    if (era_in_model) "pandemic_period"),   # 2026.10.20: constant at one era sites
   collapse = " + "
 )
 message(sprintf("  Primary model RHS:         %s", base_rhs))
@@ -2964,6 +3008,11 @@ era_ranef_list   = list()
 
 if (!isTRUE(run_era_models)) {
   message("  DISABLED by run_era_models = FALSE (recorded in aim2a3_run_config).")
+} else if (length(era_levels) < 2L) {
+  # 2026.10.20: one observed era (e.g. data beginning after 2021) -> an era
+  # refit would just repeat the primary fit, and nothing exists to compare
+  message(sprintf("  SKIPPED: only one pandemic era observed (%s); era refits need 2 or more.",
+                  paste(era_levels, collapse = ", ")))
 } else for (era in era_levels) {
   era_dt  = model_eol[pandemic_period == era]
   era_ref = era_dt[outcome_category == eol_ref]
