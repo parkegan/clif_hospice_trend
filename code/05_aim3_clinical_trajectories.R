@@ -4,7 +4,7 @@
 # Aim 3: Clinical trajectories preceding hospice transition
 # Protocol section 3.6.4
 
-# Requires updated 02_clinical_inflection.R 
+# Requires updated 02_clinical_inflection.R
 
 # Analyses:
 #   3.1  Overall trajectory characterization (hospice transitions)
@@ -33,7 +33,14 @@
 #   aim3_lst_vs_nonlst_km_{site}.pdf
 
 
-# Last updated bpe 27.05.2026
+# Last updated 26.10.19: small cell suppression in the trajectory summary now
+# applies to COUNT rows only. The median_count and median_hours rows carry a
+# continuous summary (a median) in the n column, not a patient count, and the
+# UMN 261015 bundle shipped medians of 2 to 4 masked as "<5". Those rows now
+# pass through unmasked; the flag and category count rows are suppressed
+# exactly as before.
+#
+# Previous update bpe 27.05.2026
 
 
 # 0. setup ---------------------------------------------------------------------
@@ -334,9 +341,26 @@ for (grp in unique(trajectory_summary$comparison_group)) {
 }
 message("====================================================================\n")
 
-if (isTRUE(suppress_small_cells_enabled))
-  trajectory_summary = suppress_small_cells(trajectory_summary,
-                                            count_cols = "n", pct_cols = "pct")
+# FIXED 2026.10.19: suppression applies to COUNT rows only. The median_count
+# and median_hours rows carry a MEDIAN in the n column (median labs or opioid
+# administrations per window, median hours from comfort order to hospice),
+# not a patient count: a median of 3 labs is not a small cell, and masking it
+# as "<5" destroyed the trajectory signal at UMN (261015). The count rows
+# (flag prevalences and category distributions) are suppressed exactly as
+# before; the median rows pass through unmasked with suppressed = 0. The row
+# order of the written file is unchanged.
+if (isTRUE(suppress_small_cells_enabled)) {
+  trajectory_summary[, .row_order := .I]
+  is_median = grepl("^median", trajectory_summary$level)
+  ts_counts = suppress_small_cells(trajectory_summary[!is_median],
+                                   count_cols = "n", pct_cols = "pct")
+  ts_median = copy(trajectory_summary[is_median])
+  ts_median[, n := as.character(n)]   # per element, so 3 prints "3", not "3.0"
+  ts_median[, suppressed := 0L]
+  trajectory_summary = rbind(ts_counts, ts_median, use.names = TRUE)
+  setorder(trajectory_summary, .row_order)
+  trajectory_summary[, .row_order := NULL]
+}
 fwrite(
   trajectory_summary,
   shareable_path(

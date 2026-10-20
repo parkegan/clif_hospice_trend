@@ -17,7 +17,29 @@
 #   - aim1_km_curve_{site}_{date}.pdf
 #   - aim1_ttd_histogram_{site}_{date}.pdf
 #
-# Last updated bpe 22.07.2026
+# Last updated 26.10.19 (UCMC buddy test report, items 2 to 5):
+#   - aim1_disposition_summary and aim1_quarterly_trends now pass small cell
+#     suppression before sharing, with complementary protection: the age strata
+#     of each outcome sum to its overall row and the overall rows sum to
+#     n_subgroup, so masking is iterated until no masked cell (or small sum of
+#     masked cells) is recoverable by subtraction. Previously both files
+#     shipped raw counts of 1 to 4.
+#   - pct_short_survival was 300 to 500 percent at a site with no same
+#     facility hospice: the numerator counted every short_interval_death row
+#     in the quarter while the denominator, pmax(n_hospice_sf, 1), silently
+#     became 1. The numerator is now restricted to same facility hospice rows
+#     and the percent is NA when there are no same facility transitions.
+#   - quarterly trends are restricted to discharge quarters inside the study
+#     window: an admission in late 2024 can discharge in 2025, which produced
+#     partial spill quarters with one or two encounters. Those encounters stay
+#     in the cohort; they just do not form their own trend quarters.
+#   - hospice_mortality_ratio meant same facility / deaths here and all
+#     hospice / deaths in the 01 hospital summary. Renamed on both sides:
+#     this file writes sf_hospice_to_mortality_ratio AND
+#     all_hospice_to_mortality_ratio, both NA when there are no deaths in the
+#     quarter (the pmax denominator trick is gone).
+#
+# Previous update bpe 27.05.2026
 
 
 # 0. setup ---------------------------------------------------------------------
@@ -182,8 +204,148 @@ setcolorder(disposition_summary,
             c("site", "subgroup", "n_subgroup", "stratification", "stratum",
               "outcome_category", "N", "pct"))
 
+# SMALL CELL SUPPRESSION (2026.10.19, buddy report item 2). This table is a
+# linked system of counts: within each subgroup the overall rows partition
+# n_subgroup across outcomes, and within each outcome the age strata sum to
+# its overall row, so masking one cell is reversible by subtraction. The
+# masking below therefore SIMULATES THE ATTACKER: starting from the primary
+# mask (0 < N < threshold), it propagates every identity a reader could use
+# (overall = sum of strata; n_subgroup = sum of overall rows; stratum totals
+# derived through the grand total) and, whenever a masked cell or a small sum
+# of masked cells becomes determinable, masks another cell in that identity.
+# It iterates to a fixed point, so the shipped table is subtraction proof.
+suppress_disposition = function(dt) {
+  out = copy(dt)
+  thr = small_cell_threshold
+  out[, N_num := as.numeric(N)]
+  out[, mask := !is.na(N_num) & N_num > 0 & N_num < thr]
+  out[, strat_key := fifelse(stratification == "overall", ".all",
+                             fifelse(is.na(stratum), "(missing)", stratum))]
+
+  for (sg in unique(out$subgroup)) {
+    g = which(out$subgroup == sg)
+    Tn = out$n_subgroup[g][1]
+    ocs = unique(out$outcome_category[g])
+    sts = setdiff(unique(out$strat_key[g]), ".all")
+
+    # row index per cell; NA = structurally absent, which means a true zero
+    # (the .N aggregations only emit observed combinations)
+    IDX = matrix(NA_integer_, length(ocs), length(sts) + 1,
+                 dimnames = list(ocs, c(".all", sts)))
+    for (j in g) IDX[out$outcome_category[j], out$strat_key[j]] = j
+
+    iter = 0L
+    repeat {
+      iter = iter + 1L
+
+      # ---- attacker propagation on the current mask: start from everything a
+      # reader of the shipped file holds (unmasked cells, structural zeros,
+      # n_subgroup) and repeatedly solve any identity with one unknown ----
+      V = matrix(0, length(ocs), length(sts) + 1, dimnames = dimnames(IDX))
+      for (oc in ocs) for (st in colnames(IDX)) {
+        j = IDX[oc, st]
+        V[oc, st] = if (is.na(j)) 0 else if (out$mask[j]) NA_real_ else out$N_num[j]
+      }
+      Cst = if (length(sts)) setNames(rep(NA_real_, length(sts)), sts) else numeric(0)
+      repeat {
+        changed = FALSE
+        if (length(sts)) for (oc in ocs) {           # overall = sum of strata
+          terms = V[oc, sts]
+          if (is.na(V[oc, ".all"]) && !anyNA(terms)) {
+            V[oc, ".all"] = sum(terms); changed = TRUE
+          } else if (!is.na(V[oc, ".all"]) && sum(is.na(terms)) == 1) {
+            s1 = sts[is.na(terms)]
+            V[oc, s1] = V[oc, ".all"] - sum(terms, na.rm = TRUE); changed = TRUE
+          }
+        }
+        ca = V[, ".all"]                              # n_subgroup = sum of overalls
+        if (sum(is.na(ca)) == 1) {
+          V[ocs[is.na(ca)], ".all"] = Tn - sum(ca, na.rm = TRUE); changed = TRUE
+        }
+        if (length(sts)) for (st in sts) {            # stratum totals, never published
+          terms = V[, st]
+          if (is.na(Cst[st]) && !anyNA(terms)) {
+            Cst[st] = sum(terms); changed = TRUE
+          } else if (!is.na(Cst[st]) && sum(is.na(terms)) == 1) {
+            o1 = ocs[is.na(terms)]
+            V[o1, st] = Cst[st] - sum(terms, na.rm = TRUE); changed = TRUE
+          }
+        }
+        if (length(sts) && sum(is.na(Cst)) == 1) {    # Tn = sum of stratum totals
+          Cst[sts[is.na(Cst)]] = Tn - sum(Cst, na.rm = TRUE); changed = TRUE
+        }
+        if (!changed) break
+      }
+
+      # ---- violations: a masked nonzero cell the attacker now holds, or a
+      # determined sum of masked cells that is positive and below threshold ----
+      bad = NULL
+      for (oc in ocs) { for (st in colnames(IDX)) {
+        j = IDX[oc, st]
+        if (!is.na(j) && out$mask[j] && !is.na(V[oc, st]) && V[oc, st] != 0) {
+          bad = c(oc, st); break
+        }
+      }; if (!is.null(bad)) break }
+      if (is.null(bad) && length(sts)) {
+        for (oc in ocs) {
+          mm = sts[vapply(sts, function(s) { j = IDX[oc, s]
+            !is.na(j) && out$mask[j] && is.na(V[oc, s]) }, logical(1))]
+          if (length(mm) >= 2 && !is.na(V[oc, ".all"]) &&
+              !anyNA(V[oc, setdiff(sts, mm)])) {
+            S = V[oc, ".all"] - sum(V[oc, setdiff(sts, mm)])
+            if (S > 0 && S < thr) { bad = c(oc, mm[1]); break }
+          }
+        }
+      }
+      if (is.null(bad)) {
+        mm = ocs[vapply(ocs, function(o) { j = IDX[o, ".all"]
+          !is.na(j) && out$mask[j] && is.na(V[o, ".all"]) }, logical(1))]
+        if (length(mm) >= 2 && !anyNA(V[setdiff(ocs, mm), ".all"])) {
+          S = Tn - sum(V[setdiff(ocs, mm), ".all"])
+          if (S > 0 && S < thr) bad = c(mm[1], ".all")
+        }
+      }
+      if (is.null(bad)) break
+      if (iter > 200L) {
+        warning(sprintf("suppress_disposition: closure did not converge for subgroup %s", sg))
+        break
+      }
+
+      # ---- respond: mask the smallest nonzero unmasked cell in the violated
+      # cell's row or column, then re run the attacker ----
+      oc0 = bad[1]; st0 = bad[2]
+      cand = function(idxs) {
+        js = idxs[!is.na(idxs)]
+        js[!out$mask[js] & out$N_num[js] > 0]
+      }
+      pool = cand(c(IDX[oc0, setdiff(colnames(IDX), st0)],
+                    IDX[setdiff(ocs, oc0), st0]))
+      if (!length(pool)) pool = cand(IDX[, ".all"])
+      if (!length(pool)) pool = cand(as.vector(IDX))
+      if (!length(pool)) break
+      out$mask[pool[which.min(out$N_num[pool])]] = TRUE
+    }
+  }
+
+  lab = paste0("<", thr)
+  out[, suppressed := as.integer(mask)]
+  out[, N := fifelse(mask, lab, format(N_num, scientific = FALSE, trim = TRUE))]
+  out[mask == TRUE, pct := NA_real_]
+  out[, c("N_num", "mask", "strat_key") := NULL]
+  out
+}
+
+if (isTRUE(suppress_small_cells_enabled)) {
+  disposition_out = suppress_disposition(disposition_summary)
+  message(sprintf("  Small-cell suppression: %s of %s disposition rows masked for sharing.",
+                  format(sum(disposition_out$suppressed), big.mark = ","),
+                  format(nrow(disposition_out), big.mark = ",")))
+} else {
+  disposition_out = copy(disposition_summary)[, suppressed := 0L]
+}
+
 fwrite(
-  disposition_summary,
+  disposition_out,
   shareable_path(
             paste0("aim1_disposition_summary_", site_lowercase, "_", today, ".csv"))
 )
@@ -820,36 +982,65 @@ message("\n--- Analysis E.1: Temporal trends ---")
 
 cohort[, discharge_quarter := floor_date(discharge_dttm, "quarter")]
 
+sf_categories = c("same_facility_hospice_death", "same_facility_hospice_alive")
+
 qtr = cohort[, .(
   n_total       = .N,
   n_death_acute = sum(outcome_category == "in_hospital_death_acute"),
-  n_hospice_sf  = sum(outcome_category %in% c("same_facility_hospice_death",
-                                                "same_facility_hospice_alive")),
+  n_hospice_sf  = sum(outcome_category %in% sf_categories),
   n_hospice_ext = sum(outcome_category == "external_hospice_discharge"),
-  n_hospice_all = sum(outcome_category %in% c("same_facility_hospice_death",
-                                                "same_facility_hospice_alive",
-                                                "external_hospice_discharge")),
+  n_hospice_all = sum(outcome_category %in% c(sf_categories,
+                                              "external_hospice_discharge")),
   n_transfer    = sum(outcome_category == "transfer_acute_facility"),
-  n_short_surv  = sum(short_interval_death == 1L, na.rm = TRUE)
+  # FIXED 2026.10.19: restricted to same facility hospice rows, so the count
+  # matches the denominator of pct_short_survival below (the old whole quarter
+  # count produced percentages above 100 at sites with no same facility unit)
+  n_short_surv  = sum(short_interval_death == 1L &
+                        outcome_category %in% sf_categories, na.rm = TRUE)
 ), by = discharge_quarter]
 
+# FIXED 2026.10.19: a cohort admission in late 2024 can discharge after the
+# study window ends, creating partial spill quarters with one or two
+# encounters. Those encounters stay in the cohort and in every other table;
+# they just do not form their own quarters in the trend file.
+n_spill_q = qtr[discharge_quarter > end_date, .N]
+n_spill_n = qtr[discharge_quarter > end_date, sum(n_total)]
+if (n_spill_q > 0) {
+  message(sprintf("  Dropping %d partial quarter(s) after the study window end (%s encounters discharged after %s; they remain in the cohort).",
+                  n_spill_q, format(n_spill_n, big.mark = ","),
+                  format(end_date, "%Y-%m-%d")))
+  qtr = qtr[discharge_quarter <= end_date]
+}
+
+# FIXED 2026.10.19: ratios are NA when the denominator is zero (the old
+# pmax(x, 1) silently divided by one), and the ratio is written under TWO
+# explicit names so it can never be confused with the 01 hospital summary
+# column again: sf_hospice_to_mortality_ratio (same facility only, this
+# file's historical meaning) and all_hospice_to_mortality_ratio (same
+# facility plus external, matching the 01 hospital summary definition).
 qtr[, `:=`(
   rate_death_acute = round(1000 * n_death_acute / n_total, 2),
   rate_hospice_sf  = round(1000 * n_hospice_sf / n_total, 2),
   rate_hospice_all = round(1000 * n_hospice_all / n_total, 2),
   rate_transfer    = round(1000 * n_transfer / n_total, 2),
-  hospice_mortality_ratio = round(n_hospice_sf / pmax(n_death_acute, 1), 3),
-  pct_short_survival = round(100 * n_short_surv / pmax(n_hospice_sf, 1), 1)
+  sf_hospice_to_mortality_ratio = fifelse(
+    n_death_acute > 0, round(n_hospice_sf / n_death_acute, 3), NA_real_),
+  all_hospice_to_mortality_ratio = fifelse(
+    n_death_acute > 0, round(n_hospice_all / n_death_acute, 3), NA_real_),
+  pct_short_survival = fifelse(
+    n_hospice_sf > 0, round(100 * n_short_surv / n_hospice_sf, 1), NA_real_)
 )]
 
 qtr[, site := site_lowercase]
 setorder(qtr, discharge_quarter)
 
-# 4-quarter rolling means
+# 4-quarter rolling means (true values, used for the local plot below; the
+# shareable file recomputes them AFTER suppression so a published rolling mean
+# can never back out a masked quarter)
 if (nrow(qtr) >= 4) {
   qtr[, roll_rate_hospice := frollmean(rate_hospice_sf, n = 4, align = "right")]
   qtr[, roll_rate_death   := frollmean(rate_death_acute, n = 4, align = "right")]
-  qtr[, roll_ratio        := frollmean(hospice_mortality_ratio, n = 4, align = "right")]
+  qtr[, roll_ratio        := frollmean(sf_hospice_to_mortality_ratio, n = 4, align = "right")]
 }
 
 message(sprintf("  Quarterly data: %d quarters (%s to %s)",
@@ -891,7 +1082,7 @@ if (nrow(qtr) >= 4) {
     theme_clif()
 
   # hospice-to-mortality ratio over time
-  p_ratio = ggplot(qtr, aes(x = discharge_quarter, y = hospice_mortality_ratio)) +
+  p_ratio = ggplot(qtr, aes(x = discharge_quarter, y = sf_hospice_to_mortality_ratio)) +
     geom_line(linewidth = 0.7, color = pal_outcome[["Same-facility hospice"]]) +
     geom_point(size = 1.5, color = pal_outcome[["Same-facility hospice"]]) +
     {if ("roll_ratio" %in% names(qtr))
@@ -920,8 +1111,72 @@ if (nrow(qtr) >= 4) {
   suppressWarnings(rm(trend_long, p_trends, p_ratio, p_combined))
 }
 
+# SMALL CELL SUPPRESSION (2026.10.19, buddy report item 2). Quarterly counts
+# of 1 to 4 were shipping raw. Counts below the threshold are masked with
+# complementary protection on the identity n_hospice_all = same facility plus
+# external, the rates and ratios whose numerator or denominator is masked are
+# blanked, and the rolling means are recomputed from the suppressed rates so
+# a published rolling mean cannot back out a masked quarter.
+suppress_quarterly = function(dt) {
+  out = copy(dt)
+  thr = small_cell_threshold
+  cnt_cols = c("n_total", "n_death_acute", "n_hospice_sf", "n_hospice_ext",
+               "n_hospice_all", "n_transfer", "n_short_surv")
+  M = as.matrix(out[, ..cnt_cols])
+  mask = !is.na(M) & M > 0 & M < thr
+
+  # complementary closure on n_hospice_all = n_hospice_sf + n_hospice_ext
+  for (r in seq_len(nrow(M))) {
+    repeat {
+      comps = c("n_hospice_sf", "n_hospice_ext")
+      if (mask[r, "n_hospice_all"]) break
+      m = comps[mask[r, comps]]
+      if (!length(m)) break
+      u = setdiff(comps, m)
+      S = M[r, "n_hospice_all"] - sum(M[r, u])
+      if (S == 0) break
+      if (length(m) >= 2 && S >= thr) break
+      if (length(u)) { mask[r, u[1]] = TRUE } else { mask[r, "n_hospice_all"] = TRUE }
+    }
+  }
+
+  out[, suppressed := as.integer(rowSums(mask) > 0L)]
+  lab = paste0("<", thr)
+  for (cc in cnt_cols) {
+    chr = format(M[, cc], scientific = FALSE, trim = TRUE)
+    chr[mask[, cc]] = lab
+    data.table::set(out, j = cc, value = chr)
+  }
+
+  blank_if = function(col, inputs) {
+    hit = rowSums(mask[, inputs, drop = FALSE]) > 0L
+    if (any(hit) && col %in% names(out))
+      data.table::set(out, i = which(hit), j = col, value = NA_real_)
+  }
+  blank_if("rate_death_acute",               c("n_death_acute", "n_total"))
+  blank_if("rate_hospice_sf",                c("n_hospice_sf", "n_total"))
+  blank_if("rate_hospice_all",               c("n_hospice_all", "n_total"))
+  blank_if("rate_transfer",                  c("n_transfer", "n_total"))
+  blank_if("sf_hospice_to_mortality_ratio",  c("n_hospice_sf", "n_death_acute"))
+  blank_if("all_hospice_to_mortality_ratio", c("n_hospice_all", "n_death_acute"))
+  blank_if("pct_short_survival",             c("n_short_surv", "n_hospice_sf"))
+
+  # rolling means from the SUPPRESSED rates: an NA quarter blanks every
+  # window that contains it, so nothing masked can be reconstructed
+  for (rc in intersect(c("roll_rate_hospice", "roll_rate_death", "roll_ratio"), names(out)))
+    data.table::set(out, j = rc, value = NULL)
+  if (nrow(out) >= 4) {
+    out[, roll_rate_hospice := frollmean(rate_hospice_sf, n = 4, align = "right")]
+    out[, roll_rate_death   := frollmean(rate_death_acute, n = 4, align = "right")]
+    out[, roll_ratio        := frollmean(sf_hospice_to_mortality_ratio, n = 4, align = "right")]
+  }
+  out
+}
+
+qtr_out = if (isTRUE(suppress_small_cells_enabled)) suppress_quarterly(qtr) else copy(qtr)[, suppressed := 0L]
+
 # save quarterly data for cross-site compilation
-fwrite(qtr,
+fwrite(qtr_out,
        shareable_path(
                  paste0("aim1_quarterly_trends_", site_lowercase, "_", today, ".csv")))
 message("  Saved aim1_quarterly_trends.")
@@ -1034,13 +1289,13 @@ if (length(hospice_admit_file) > 0) {
 # cleanup
 # =============================================================================
 
-rm(cohort, cohort_all, disposition_summary, ttd_results, ttd_summary,
-   km_data_all, table1_all, subgroup_defs,
-   heur_cols, qtr)
+rm(cohort, cohort_all, disposition_summary, disposition_out, ttd_results, ttd_summary,
+   cif_data_all, table1_all, subgroup_defs,
+   heur_cols, qtr, qtr_out)
 
 # remove plot objects if they exist
 suppressWarnings(rm(p_km, p_hist, km_plot_dt, lst_km_dt, hist_dt, hospice_fc,
-                    km_fc, lst_km, fc_t1,
+                    km_fc, lst_km, fc_t1, suppress_disposition, suppress_quarterly,
                     is_death_linked))
 
 gc()

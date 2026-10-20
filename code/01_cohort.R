@@ -1,5 +1,11 @@
 
 # 01_cohort.R
+# Updated 26.10.19 (UCMC buddy test report): the hospital summary ratio is
+# renamed all_hospice_to_mortality_ratio (it is all hospice over acute deaths;
+# 03's quarterly file carried a SAME FACILITY ratio under the old shared name,
+# which made the two files disagree at any site with external only hospice),
+# and the quarterly hospital summary drops partial spill quarters after the
+# study window end.
 # Updated 26.10.16: small-cell suppression with complementary (subtraction
 # proof) masking applied to the shareable hospital summaries in section 8b.
 # The first populated UMN summary (261015) carried raw counts of 1 to 4 and
@@ -1141,7 +1147,7 @@ suppress_hospital_summary = function(dt) {
     rate_sf_hospice         = "n_sf_hospice",
     rate_ext_hospice        = "n_external_hospice",
     rate_short_surv         = "n_short_survival",
-    hospice_mortality_ratio = c("n_hospice_all", "n_in_hospital_death_acute"))
+    all_hospice_to_mortality_ratio = c("n_hospice_all", "n_in_hospital_death_acute"))
 
   all_cols = union(cnt_cols, intersect("n_admissions", names(out)))
   M    = as.matrix(out[, ..all_cols])
@@ -1287,7 +1293,7 @@ if (is.null(hospital_medicare_map)) {
     rate_sf_hospice  = round(1000 * n_sf_hospice / n_admissions, 2),
     rate_ext_hospice = round(1000 * n_external_hospice / n_admissions, 2),
     rate_short_surv  = round(1000 * n_short_survival / n_admissions, 2),
-    hospice_mortality_ratio = round(fifelse(
+    all_hospice_to_mortality_ratio = round(fifelse(
       n_in_hospital_death_acute > 0,
       n_hospice_all / n_in_hospital_death_acute,
       NA_real_), 3)
@@ -1338,7 +1344,19 @@ if (is.null(hospital_medicare_map)) {
     cohort_ccn_q[, discharge_quarter := floor_date(discharge_dttm, "quarter")]
   }
 
-  ccn_quarterly = cohort_ccn_q[!is.na(medicare_id) & !is.na(discharge_quarter), .(
+  # 2026.10.19 (UCMC buddy test, item 4): an admission inside the study
+  # window can discharge after it ends, creating partial spill quarters with
+  # a handful of encounters. Those encounters stay in the cohort and in the
+  # annual hospital summary; they just do not form their own quarters here.
+  n_spill_q = cohort_ccn_q[!is.na(medicare_id) & !is.na(discharge_quarter) &
+                             discharge_quarter > end_date, .N]
+  if (n_spill_q > 0) {
+    message(sprintf("  Quarterly hospital summary: dropping %s encounters discharged after %s (partial spill quarters; they remain in the cohort).",
+                    format(n_spill_q, big.mark = ","), format(end_date, "%Y-%m-%d")))
+  }
+
+  ccn_quarterly = cohort_ccn_q[!is.na(medicare_id) & !is.na(discharge_quarter) &
+                                 discharge_quarter <= end_date, .(
 
     n_admissions = .N,
 
@@ -1376,7 +1394,7 @@ if (is.null(hospital_medicare_map)) {
     rate_sf_hospice  = round(1000 * n_sf_hospice / n_admissions, 2),
     rate_ext_hospice = round(1000 * n_external_hospice / n_admissions, 2),
     rate_short_surv  = round(1000 * n_short_survival / n_admissions, 2),
-    hospice_mortality_ratio = round(fifelse(
+    all_hospice_to_mortality_ratio = round(fifelse(
       n_in_hospital_death_acute > 0,
       n_hospice_all / n_in_hospital_death_acute,
       NA_real_), 3)
