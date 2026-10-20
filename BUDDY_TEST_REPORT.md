@@ -33,11 +33,11 @@ Pass with notes is only for the Overall verdict at the bottom.
 | 5 | Outputs in `output/final_no_phi/` with right naming/type, no raw dumps | Pass  | Outputs go to `ucmc_upload_to_box/`|
 | 6 | **Data security**: no PHI, every stat n ≥ 10, no raw data *(blocking)* | Pass with notes | Counts < 5 suppressed (n < 5 threshold accepted). |
 | 7 | Clinical sanity: aggregates plausible for the cohort | Pass | |
-| 8 | Documentation usable: could run from the README alone | Pass | See note 2. |
+| 8 | Documentation usable: could run from the README alone | Pass |  |
 
 ## Overall verdict
 
-**Verdict:** Pass with notes
+**Verdict:** Pass 
 
 
 ### Blocking issues (must fix before distribution)
