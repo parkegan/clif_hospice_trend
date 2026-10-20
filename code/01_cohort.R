@@ -1,5 +1,10 @@
 
 # 01_cohort.R
+# Updated 26.10.20 (Penn): patient.death_dttm is normalized to POSIXct right
+# after it is read (section 4a). A date only death column made every death
+# compare as earlier than discharge, which clamped discharge to 1970 and dropped
+# every decedent's encounters without an error. Date only deaths take the
+# discharge time of the encounter discharged that day, else end of day.
 # Updated 26.10.19 (UCMC buddy test report): the hospital summary ratio is
 # renamed all_hospice_to_mortality_ratio (it is all hospice over acute deaths;
 # 03's quarterly file carried a SAME FACILITY ratio under the old shared name,
@@ -469,6 +474,87 @@ patient = data_list[["patient"]] |>
   dplyr::select(patient_id, death_dttm) |>
   dplyr::collect() |>
   as.data.table()
+
+# DEATH TIMESTAMP TYPE (2026.10.20, Penn). Every comparison below assumes
+# death_dttm is a POSIXct date time. Sites that store only a DEATH DATE (a
+# Date, or text without a time) broke that silently: R compares a Date with a
+# POSIXct on their raw numbers (days vs seconds), so EVERY death looked
+# earlier than discharge, the clamp below moved discharge to 1970, and every
+# encounter of every decedent was then dropped as "post mortem". The stage
+# finished, and 02 was the first place the type mismatch stopped anything.
+# The column is now normalized here, once, to POSIXct:
+#   * POSIXct: unchanged.
+#   * date only (Date, or text with no time component): the death time is
+#     taken as the discharge time of the patient's encounter discharged on the
+#     death date (the usual in hospital death pattern), otherwise the END of
+#     the death date in the site's time zone, so a date only death can never
+#     precede a same day discharge. Time to death at date only sites is
+#     therefore resolved to the day for deaths after discharge.
+#   * text with times: parsed in the site's time zone.
+#   * entirely missing: an all NA POSIXct column.
+death_raw   = patient$death_dttm
+death_class = class(death_raw)[1]
+death_resolution = "datetime"
+if (!inherits(death_raw, "POSIXct")) {
+  death_date = NULL
+  if (inherits(death_raw, "Date")) {
+    death_date = as.Date(death_raw)
+  } else if (is.character(death_raw) || is.factor(death_raw)) {
+    txt = trimws(as.character(death_raw)); txt[txt == ""] = NA_character_
+    has_time = !is.na(txt) & grepl("[0-9]{1,2}:[0-9]{2}", txt)
+    if (any(has_time)) {
+      parsed = suppressWarnings(lubridate::parse_date_time(
+        txt, orders = c("Ymd HMSz", "Ymd HMS", "Ymd HM", "Ymd"), tz = tz_local))
+      n_fail = sum(!is.na(txt) & is.na(parsed))
+      if (n_fail > 0)
+        message(sprintf("    death_dttm: %s text value(s) could not be parsed and are treated as missing.",
+                        format(n_fail, big.mark = ",")))
+      patient[, death_dttm := parsed]
+      death_resolution = "datetime_parsed_from_text"
+    } else {
+      death_date = suppressWarnings(as.Date(lubridate::parse_date_time(
+        txt, orders = c("Ymd", "mdY"), tz = tz_local)))
+    }
+  } else if (all(is.na(death_raw))) {
+    patient[, death_dttm := as.POSIXct(rep(NA_real_, .N), origin = "1970-01-01", tz = "UTC")]
+    death_resolution = "none_recorded"
+  } else {
+    stop(sprintf("patient.death_dttm has an unsupported type (%s); expected a date time or a date.",
+                 death_class))
+  }
+
+  if (!is.null(death_date)) {
+    death_resolution = "date_only"
+    pd = data.table(patient_id = patient$patient_id, death_date = death_date)[!is.na(death_date)]
+    disc = hosp[patient_id %in% pd$patient_id & !is.na(discharge_dttm),
+                .(patient_id, discharge_dttm,
+                  disc_date = as.Date(format(discharge_dttm, tz = tz_local)))]
+    same_day = merge(pd, disc, by.x = c("patient_id", "death_date"),
+                     by.y = c("patient_id", "disc_date"))[
+      , .(death_same_day = max(discharge_dttm)), by = patient_id]
+    eod = as.POSIXct(paste(format(death_date), "23:59:59"),
+                     format = "%Y-%m-%d %H:%M:%S", tz = tz_local)   # NA dates stay NA
+    patient[, death_dttm := eod]
+    attr(patient$death_dttm, "tzone") = "UTC"
+    patient[same_day, on = "patient_id", death_dttm := i.death_same_day]
+    n_dd = sum(!is.na(death_date))
+    qi_flag(
+      "Death recorded as a date only",
+      sprintf(paste0(
+        "patient.death_dttm arrived as %s (no time of day) for %s patient(s). Death\n",
+        "times were set to the discharge time of the encounter discharged on the death\n",
+        "date (%s patients) and otherwise to the end of the death date (%s patients).\n",
+        "Hours to death after discharge are resolved to the day at this site."),
+        death_class, format(n_dd, big.mark = ","),
+        format(nrow(same_day), big.mark = ","),
+        format(n_dd - nrow(same_day), big.mark = ",")))
+    suppressWarnings(rm(pd, disc, same_day, eod))
+  }
+  message(sprintf("  death_dttm normalized from %s to POSIXct (%s).", death_class, death_resolution))
+}
+stopifnot(inherits(patient$death_dttm, "POSIXct"))
+suppressWarnings(rm(death_raw, death_date, txt, has_time, parsed, n_fail, n_dd))
+
 
 hosp = merge(hosp, patient, by = "patient_id", all.x = TRUE)
 rm(patient)

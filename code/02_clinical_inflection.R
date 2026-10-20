@@ -42,7 +42,9 @@
 # Output: one row per hospitalization_id with all component flags,
 #         composites, inflection point timing, and Aim 3 variables
 
-# Last updated bpe 22.07.2026
+# Last updated 2026.10.20 (Penn): datetime columns are coerced to POSIXct before
+# the endpoint is built (a date only death_dttm crashed the endpoint fifelse).
+# Previous update bpe 2026.27.05
 
 
 # 0. setup ---------------------------------------------------------------------
@@ -55,6 +57,28 @@ cohort_all = fread(latest_output("cohort_all_hospitalizations"),
 cohort_all[, hospitalization_id := as.character(hospitalization_id)]
 cohort_all[, patient_id := as.character(patient_id)]
 
+# ensure datetimes are POSIXct BEFORE any are compared or combined.
+# FIXED 2026.10.20 (Penn): this loop used to run after the endpoint below,
+# so a death_dttm that came back from the cohort CSV as a date (IDate) or
+# as an all missing logical column hit fifelse() first and stopped with
+# "'yes' has different class than 'no'". 01 now always writes a POSIXct
+# death_dttm; this is the second line of defense for older cohort files.
+dt_cols = c("admission_dttm", "discharge_dttm", "death_dttm",
+            "hospice_transition_dttm")
+for (col in dt_cols) {
+  if (col %in% names(cohort_all) && !inherits(cohort_all[[col]], "POSIXct")) {
+    if (col == "death_dttm" && inherits(cohort_all[[col]], "Date"))
+      warning("death_dttm in the cohort file is a DATE, not a date time. This cohort ",
+              "file predates the 26.10.20 fix in 01_cohort.R, which also corrects how ",
+              "date only deaths are handled there. Rerun 01 before trusting 02 onward.",
+              call. = FALSE)
+    set(cohort_all, j = col,
+        value = if (all(is.na(cohort_all[[col]]))) {
+          as.POSIXct(rep(NA_real_, nrow(cohort_all)), origin = "1970-01-01", tz = "UTC")
+        } else as.POSIXct(cohort_all[[col]], tz = "UTC"))
+  }
+}
+
 # we need a reference endpoint for each encounter:
 # use death_dttm if died, otherwise discharge_dttm
 cohort_all[, endpoint_dttm := fifelse(
@@ -65,15 +89,6 @@ cohort_all[, endpoint_dttm := fifelse(
 
 # limit to primary cohort
 cohort = cohort_all[in_cohort == 1L]
-
-# ensure datetimes are POSIXct
-dt_cols = c("admission_dttm", "discharge_dttm", "death_dttm", "endpoint_dttm",
-            "hospice_transition_dttm")
-for (col in dt_cols) {
-  if (col %in% names(cohort) && !inherits(cohort[[col]], "POSIXct")) {
-    set(cohort, j = col, value = as.POSIXct(cohort[[col]], tz = "UTC"))
-  }
-}
 
 hids = unique(cohort$hospitalization_id)
 n_cohort = length(hids)
